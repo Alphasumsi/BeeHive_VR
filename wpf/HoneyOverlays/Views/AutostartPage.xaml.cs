@@ -1,0 +1,15 @@
+using System.Windows.Controls;
+
+namespace HoneyOverlays.Views
+{
+    /// <summary>
+    /// Interaktionslogik für AutostartPage.xaml — Platzhalter, Inhalt kommt später.
+    /// </summary>
+    public partial class AutostartPage : UserControl
+    {
+        public AutostartPage()
+        {
+            InitializeComponent();
+        }
+    }
+}

@@ -1,0 +1,185 @@
+<UserControl x:Class="HoneyOverlays.Views.HtmlOverlaysPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d"
+             Background="{StaticResource BgPrimary}">
+
+    <Grid Margin="20,16,20,16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <Border Grid.Row="0" BorderBrush="{StaticResource BorderTertiary}"
+                BorderThickness="0,0,0,1" Margin="0,0,0,14">
+            <DockPanel LastChildFill="False">
+                <Image DockPanel.Dock="Right"
+                       Source="/Assets/irdashies_logo_100.png"
+                       Height="36" Margin="0,0,8,4"
+                       VerticalAlignment="Center"
+                       RenderOptions.BitmapScalingMode="HighQuality"
+                       ToolTip="irDashies (github.com/jamesremuscat/irdashies)"/>
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                    <Border Padding="14,8" BorderBrush="{StaticResource AccentText}"
+                            BorderThickness="0,0,0,2">
+                        <TextBlock Text="irDashies" FontSize="15" FontWeight="SemiBold"/>
+                    </Border>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+
+                <!-- ===== Add widget ===== -->
+                <TextBlock Text="Add widget" FontSize="20" FontWeight="Light"
+                           Foreground="{StaticResource TextSecondary}" Margin="0,0,0,12"/>
+                <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                        CornerRadius="6" Background="{StaticResource BgSecondary}"
+                        Padding="14,12" Margin="0,0,0,20">
+                    <StackPanel>
+
+                        <TextBlock TextWrapping="Wrap" FontSize="11"
+                                   Foreground="{StaticResource TextTertiary}" Margin="0,0,0,10"
+                                   Text="Configure widget appearance and options in the original irDashies app. Honey automatically reads %APPDATA%\irdashies\config.json (active profile). Visibility and placement are managed in Honey (Layout tab), not in irDashies."/>
+
+                        <!-- Widget -->
+                        <Grid Margin="0,4,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                <TextBlock Text="Widget" FontSize="13" FontWeight="SemiBold"/>
+                                <TextBlock Text="Pick which irDashies widget to add as an overlay"
+                                           FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                           Margin="0,2,0,0"/>
+                            </StackPanel>
+                            <ComboBox Grid.Column="1" x:Name="WidgetBox"
+                                      MinWidth="220" Height="30" Padding="8,5"
+                                      Margin="12,0,0,0" VerticalAlignment="Center"
+                                      SelectionChanged="WidgetBox_SelectionChanged"/>
+                        </Grid>
+
+                        <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                        <!-- Name -->
+                        <StackPanel Margin="0,4,0,4">
+                            <TextBlock Text="Name" FontSize="13" FontWeight="SemiBold"/>
+                            <TextBlock Text="Shown in the source list — defaults to the widget id"
+                                       FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                       Margin="0,2,0,6"/>
+                            <TextBox x:Name="NameBox" Height="30" Padding="8,5"
+                                     VerticalContentAlignment="Center" FontSize="12"/>
+                        </StackPanel>
+
+                        <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                        <!-- Generated URL -->
+                        <StackPanel Margin="0,4,0,4">
+                            <TextBlock Text="Generated URL" FontSize="13" FontWeight="SemiBold"/>
+                            <TextBlock Text="Built from adapter address, profile and widget id"
+                                       FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                       Margin="0,2,0,6"/>
+                            <TextBox x:Name="UrlPreview" IsReadOnly="True" TextWrapping="Wrap"
+                                     FontFamily="Cascadia Mono, Consolas" FontSize="12"
+                                     Background="{StaticResource BgTertiary}"
+                                     Foreground="{StaticResource TextTertiary}"
+                                     BorderBrush="{StaticResource BorderTertiary}"
+                                     Padding="8,5"/>
+                        </StackPanel>
+
+                        <!-- Buttons -->
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="AddButton" Content="Add overlay"
+                                    Click="Add_Click"
+                                    Padding="14,7" FontWeight="SemiBold" Cursor="Hand"/>
+                            <Button x:Name="CopyButton" Content="Copy URL"
+                                    Click="CopyUrl_Click"
+                                    Margin="8,0,0,0" Padding="14,7" Cursor="Hand"/>
+                        </StackPanel>
+
+                    </StackPanel>
+                </Border>
+
+                <!-- ===== Live reload ===== -->
+                <TextBlock Text="Live reload" FontSize="20" FontWeight="Light"
+                           Foreground="{StaticResource TextSecondary}" Margin="0,0,0,12"/>
+                <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                        CornerRadius="6" Background="{StaticResource BgSecondary}"
+                        Padding="14,12" Margin="0,0,0,20">
+                    <Grid Margin="0,4,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock Text="Reload all irDashies overlays"
+                                       FontSize="13" FontWeight="SemiBold"/>
+                            <TextBlock Text="Respawns running browser hosts so they pick up dashboard.json changes"
+                                       FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                       Margin="0,2,0,0"/>
+                        </StackPanel>
+                        <Button Grid.Column="1" x:Name="ReloadButton" Content="Reload all"
+                                Click="ReloadAll_Click"
+                                Padding="14,7" VerticalAlignment="Center"
+                                Margin="12,0,0,0" Cursor="Hand"/>
+                    </Grid>
+                </Border>
+
+                <!-- ===== Adapter ===== -->
+                <TextBlock Text="Adapter" FontSize="20" FontWeight="Light"
+                           Foreground="{StaticResource TextSecondary}" Margin="0,0,0,12"/>
+                <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                        CornerRadius="6" Background="{StaticResource BgSecondary}"
+                        Padding="14,12" Margin="0,0,0,20">
+                    <StackPanel Margin="0,4,0,4">
+                        <TextBlock Text="Adapter address" FontSize="13" FontWeight="SemiBold"/>
+                        <TextBlock Text="Local HTTP + WebSocket endpoint that feeds the widgets"
+                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                   Margin="0,2,0,6"/>
+                        <TextBox x:Name="AdapterBox" IsReadOnly="True"
+                                 FontFamily="Cascadia Mono, Consolas" FontSize="12"
+                                 Background="{StaticResource BgTertiary}"
+                                 Foreground="{StaticResource TextSecondary}"
+                                 BorderBrush="{StaticResource BorderTertiary}"
+                                 Padding="8,5"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- ===== Disclaimer ===== -->
+                <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                        CornerRadius="6" Background="{StaticResource BgSecondary}"
+                        Padding="14,12" Margin="0,0,0,8">
+                    <StackPanel>
+                        <TextBlock FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                   TextWrapping="Wrap" FontStyle="Italic">
+                            Honey Overlays is an independent project and is not affiliated with,
+                            endorsed by, or sponsored by irDashies. All trademarks, logos and
+                            brand names are property of their respective owners.
+                        </TextBlock>
+                        <TextBlock FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                   TextWrapping="Wrap" FontStyle="Italic" Margin="0,6,0,0">
+                            This app hosts irDashies widgets locally to render them as VR overlays
+                            in iRacing.
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Status line -->
+        <Border Grid.Row="2" BorderBrush="{StaticResource BorderTertiary}"
+                BorderThickness="0,1,0,0" Padding="0,8,0,0" Margin="0,8,0,0">
+            <TextBlock x:Name="StatusText" Text=""
+                       FontSize="11" Foreground="{StaticResource TextTertiary}"
+                       FontStyle="Italic" TextWrapping="Wrap"/>
+        </Border>
+
+    </Grid>
+</UserControl>

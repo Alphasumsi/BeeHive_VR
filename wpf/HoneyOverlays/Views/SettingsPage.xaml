@@ -1,0 +1,791 @@
+<UserControl x:Class="HoneyOverlays.Views.SettingsPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:HoneyOverlays.ViewModels"
+             mc:Ignorable="d"
+             Background="{StaticResource BgPrimary}">
+
+    <!--
+        DataContext = SettingsViewModel (im Code-Behind gesetzt damit
+        Visibility-Bindings vom MainWindow weiterhin greifen).
+        Sub-Tabs sind eine lange scrollbare Page — Sub-Sidebar-Klick
+        scrollt zur Section via BringIntoView().
+    -->
+
+    <Grid Margin="20,16,20,16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- ========================================================== -->
+        <!-- Tab-Header + Version rechts                                 -->
+        <!-- ========================================================== -->
+        <Border Grid.Row="0" BorderBrush="{StaticResource BorderTertiary}"
+                BorderThickness="0,0,0,1" Margin="0,0,0,14">
+            <DockPanel LastChildFill="False">
+                <TextBlock DockPanel.Dock="Right" Text="{Binding AppVersion}"
+                           FontSize="12" Foreground="{StaticResource TextTertiary}"
+                           VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                    <Border Padding="14,8" BorderBrush="{StaticResource AccentText}"
+                            BorderThickness="0,0,0,2">
+                        <TextBlock Text="Settings" FontSize="15" FontWeight="SemiBold"/>
+                    </Border>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <!-- ========================================================== -->
+        <!-- Body: Sub-Sidebar links + Inhaltsbereich rechts             -->
+        <!-- ========================================================== -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="180"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- ============== Sub-Sidebar ============== -->
+            <Border Grid.Column="0"
+                    BorderBrush="{StaticResource BorderTertiary}"
+                    BorderThickness="0,0,1,0"
+                    Padding="0,0,8,0">
+                <StackPanel>
+                    <Button Content="General" Tag="General"
+                            Click="SubNav_Click"
+                            Style="{StaticResource SettingsSubNavButton}"/>
+                    <Button Content="Startup" Tag="Startup"
+                            Click="SubNav_Click"
+                            Style="{StaticResource SettingsSubNavButton}"/>
+                    <Button Content="Appearance" Tag="Appearance"
+                            Click="SubNav_Click"
+                            Style="{StaticResource SettingsSubNavButton}"/>
+                    <Button Content="Paths" Tag="Paths"
+                            Click="SubNav_Click"
+                            Style="{StaticResource SettingsSubNavButton}"/>
+                    <Button Content="Keybinds" Tag="Keybinds"
+                            Click="SubNav_Click"
+                            Style="{StaticResource SettingsSubNavButton}"/>
+                    <Button Content="Updates" Tag="Updates"
+                            Click="SubNav_Click"
+                            Style="{StaticResource SettingsSubNavButton}"/>
+                    <Button Content="About" Tag="About"
+                            Click="SubNav_Click"
+                            Style="{StaticResource SettingsSubNavButton}"/>
+                    <Button Content="Developer" Tag="Developer"
+                            Click="SubNav_Click"
+                            Style="{StaticResource SettingsSubNavButton}"
+                            Foreground="{StaticResource DevModeAccent}"
+                            Visibility="{Binding DataContext.IsDevMode,
+                                RelativeSource={RelativeSource AncestorType=Window},
+                                Converter={StaticResource BoolToVis}}"/>
+                </StackPanel>
+            </Border>
+
+            <!-- ============== Inhaltsbereich ============== -->
+            <ScrollViewer Grid.Column="1" Margin="16,0,0,0"
+              VerticalScrollBarVisibility="Auto"
+              x:Name="SectionsScrollViewer"
+              ScrollChanged="SectionsScrollViewer_ScrollChanged">
+                <StackPanel x:Name="SectionsHost">
+
+                    <!-- ===== General ===== -->
+                    <StackPanel x:Name="Section_General" Margin="0,0,0,40">
+                        <TextBlock Text="General"
+                                   FontSize="20" FontWeight="Light"
+                                   Foreground="{StaticResource TextSecondary}"
+                                   Margin="0,0,0,12"/>
+
+                        <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                                CornerRadius="6" Background="{StaticResource BgSecondary}"
+                                Padding="14,12" Margin="0,0,0,16">
+                            <StackPanel>
+                                <!-- Auto-create layout -->
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Auto-create layout when new car is detected"
+                                                   FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="If off, layout is only created on first edit"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding AutoCreateLayoutOnNewCar}"
+                                              Style="{StaticResource ToggleSwitch}"
+                                              VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- ===== Startup ===== -->
+                    <StackPanel x:Name="Section_Startup" Margin="0,0,0,40">
+                        <TextBlock Text="Startup"
+                                   FontSize="20" FontWeight="Light"
+                                   Foreground="{StaticResource TextSecondary}"
+                                   Margin="0,0,0,12"/>
+
+                        <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                                CornerRadius="6" Background="{StaticResource BgSecondary}"
+                                Padding="14,12" Margin="0,0,0,16">
+                            <StackPanel>
+                                <!-- Remember window position and scale -->
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Remember Window Position and Scale" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Restore window position, size and UI scale on next start"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding RememberWindowPositionAndScale}"
+                                              Style="{StaticResource ToggleSwitch}"
+                                              VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                </Grid>
+
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                                <!-- Start with Windows -->
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Start with Windows" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Launch automatically when Windows starts"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding StartWithWindows}"
+                                              Style="{StaticResource ToggleSwitch}"
+                                              VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                </Grid>
+
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                                <!-- Start minimized -->
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Start minimized" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Open to taskbar instead of full window"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding StartMinimized}"
+                                              Style="{StaticResource ToggleSwitch}"
+                                              VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                </Grid>
+
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                                <!-- Start in tray -->
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Start in tray" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Hide to system tray on startup"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding StartInTray}"
+                                              Style="{StaticResource ToggleSwitch}"
+                                              VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                </Grid>
+
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                                <!-- Start page -->
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="160"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Start page" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Which section opens when the app starts"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <ComboBox Grid.Column="1"
+                                              ItemsSource="{Binding StartPageOptions}"
+                                              SelectedItem="{Binding StartPage}"
+                                              VerticalAlignment="Center" Height="30"
+                                              Margin="12,0,0,0"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- ===== Appearance ===== -->
+                    <StackPanel x:Name="Section_Appearance" Margin="0,0,0,40">
+                        <TextBlock Text="Appearance"
+                                   FontSize="20" FontWeight="Light"
+                                   Foreground="{StaticResource TextSecondary}"
+                                   Margin="0,0,0,12"/>
+
+                        <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                                CornerRadius="6" Background="{StaticResource BgSecondary}"
+                                Padding="14,12" Margin="0,0,0,16">
+                            <StackPanel>
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="UI scale" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Scales the entire window — useful for high-DPI displays"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                VerticalAlignment="Center" Margin="12,0,0,0">
+                                        <Button Content="–" Command="{Binding UiScaleDecreaseCommand}"
+                                                Width="32" Height="30" FontSize="18" FontWeight="SemiBold"
+                                                Padding="0" VerticalContentAlignment="Center"
+                                                HorizontalContentAlignment="Center"/>
+                                        <Border Background="{StaticResource BgPrimary}"
+                                                BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                                                CornerRadius="4" MinWidth="60" Height="30"
+                                                Margin="6,0,6,0">
+                                            <TextBlock Text="{Binding UiScalePercent}"
+                                                       FontSize="12" FontWeight="SemiBold"
+                                                       VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                                        </Border>
+                                        <Button Content="+" Command="{Binding UiScaleIncreaseCommand}"
+                                                Width="32" Height="30" FontSize="18" FontWeight="SemiBold"
+                                                Padding="0" VerticalContentAlignment="Center"
+                                                HorizontalContentAlignment="Center"/>
+                                    </StackPanel>
+                                </Grid>
+
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                                <!-- Icon-Nav Sichtbarkeit -->
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Show Trading Paints" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Show the Trading Paints icon in the navigation bar"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding ShowTradingPaints}"
+                                              Style="{StaticResource ToggleSwitch}"
+                                              VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                </Grid>
+
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Show irDashies" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Show the irDashies icon in the navigation bar"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding ShowHtmlOverlays}"
+                                              Style="{StaticResource ToggleSwitch}"
+                                              VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                </Grid>
+
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Language" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Application language (English / Deutsch)"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <ComboBox Grid.Column="1" IsEnabled="False"
+                                              VerticalAlignment="Center" Height="30" Width="160"
+                                              Margin="12,0,0,0">
+                                        <ComboBoxItem Content="English" IsSelected="True"/>
+                                    </ComboBox>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- ===== Paths ===== -->
+                    <StackPanel x:Name="Section_Paths" Margin="0,0,0,40">
+                        <TextBlock Text="Paths"
+                                   FontSize="20" FontWeight="Light"
+                                   Foreground="{StaticResource TextSecondary}"
+                                   Margin="0,0,0,12"/>
+
+                        <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                                CornerRadius="6" Background="{StaticResource BgSecondary}"
+                                Padding="14,12" Margin="0,0,0,16">
+                            <StackPanel>
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Configs folder" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Where layout JSON files are stored"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Content="Open" Click="OpenConfigsFolder_Click"
+                                            Padding="12,6" VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Log folder" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Where the application log file is written"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Content="Open" Click="OpenLogFolder_Click"
+                                            Padding="12,6" VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                                <StackPanel Margin="0,4,0,4">
+                                    <TextBlock Text="Browser host executable" FontSize="13" FontWeight="SemiBold"/>
+                                    <TextBlock Text="Path to browser-host.exe (WebView2 wrapper for browser sources). Leave empty to auto-detect."
+                                               FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                               Margin="0,2,0,6" TextWrapping="Wrap"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox Grid.Column="0"
+                                                 Text="{Binding BrowserHostExecutable}"
+                                                 Height="30" VerticalContentAlignment="Center"
+                                                 FontSize="12"/>
+                                        <Button Grid.Column="1" Content="Browse…"
+                                                Click="BrowseBrowserHost_Click"
+                                                Padding="12,6" Margin="8,0,0,0"
+                                                VerticalAlignment="Center"/>
+                                    </Grid>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- ===== Keybinds ===== -->
+                    <StackPanel x:Name="Section_Keybinds" Margin="0,0,0,40">
+                        <TextBlock Text="Keybinds"
+                                   FontSize="20" FontWeight="Light"
+                                   Foreground="{StaticResource TextSecondary}"
+                                   Margin="0,0,0,12"/>
+
+                        <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                                CornerRadius="6" Background="{StaticResource BgSecondary}"
+                                Padding="14,12" Margin="0,0,0,16">
+                            <ItemsControl ItemsSource="{Binding Keybinds}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,6,0,6">
+                                            <Grid.Style>
+                                                <Style TargetType="Grid">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsActive}" Value="False">
+                                                            <Setter Property="Opacity" Value="0.55"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Grid.Style>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding DisplayName}"
+                                                           FontSize="13" FontWeight="SemiBold"/>
+                                                <TextBlock Text="{Binding Description}"
+                                                           FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                           Margin="0,2,0,0" TextWrapping="Wrap"/>
+                                            </StackPanel>
+                                            <Button Grid.Column="1" Content="{Binding BindingText}"
+                                                    Command="{Binding RebindCommand}"
+                                                    Padding="12,6" VerticalAlignment="Center"
+                                                    MinWidth="200" Margin="12,0,0,0"/>
+                                            <Button Grid.Column="2" Content="✕"
+                                                    Command="{Binding ClearCommand}"
+                                                    ToolTip="Clear binding"
+                                                    Padding="8,6" VerticalAlignment="Center"
+                                                    Margin="6,0,0,0"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </Border>
+
+                        <TextBlock Text="Bindings work globally (also while iRacing is focused). Recenter / Place in VR are bindable but inactive until their engine feature ships."
+                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                   FontStyle="Italic" TextWrapping="Wrap" Margin="2,8,0,0"/>
+                    </StackPanel>
+
+                    <!-- ===== Updates ===== -->
+                    <StackPanel x:Name="Section_Updates" Margin="0,0,0,40">
+                        <TextBlock Text="Updates"
+                                   FontSize="20" FontWeight="Light"
+                                   Foreground="{StaticResource TextSecondary}"
+                                   Margin="0,0,0,12"/>
+
+                        <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                                CornerRadius="6" Background="{StaticResource BgSecondary}"
+                                Padding="14,12" Margin="0,0,0,16">
+                            <StackPanel>
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Current version" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="{Binding AppVersion}"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Content="Check for updates"
+                                            IsEnabled="False"
+                                            Padding="12,6" VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Auto-check on startup" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Look for new releases when the app starts"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsEnabled="False"
+                                              Style="{StaticResource ToggleSwitch}"
+                                              VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- ===== About ===== -->
+                    <StackPanel x:Name="Section_About" Margin="0,0,0,40">
+                        <TextBlock Text="About"
+                                   FontSize="20" FontWeight="Light"
+                                   Foreground="{StaticResource TextSecondary}"
+                                   Margin="0,0,0,12"/>
+
+                        <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                                CornerRadius="6" Background="{StaticResource BgSecondary}"
+                                Padding="14,12" Margin="0,0,0,16">
+                            <StackPanel>
+                                <StackPanel Margin="0,0,0,14">
+                                    <TextBlock Text="VR-Overlay Layout" FontSize="14" FontWeight="SemiBold"/>
+                                    <TextBlock Text="{Binding AppVersion}"
+                                               FontSize="12" Foreground="{StaticResource TextTertiary}"
+                                               Margin="0,2,0,0"/>
+                                </StackPanel>
+
+                                <Button Content="GitHub" Click="OpenGitHub_Click"
+                                        Padding="12,6" HorizontalAlignment="Left"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- ===== Developer (nur sichtbar im Dev-Mode) ===== -->
+                    <StackPanel x:Name="Section_Developer" Margin="0,0,0,40"
+                                Visibility="{Binding DataContext.IsDevMode,
+                                    RelativeSource={RelativeSource AncestorType=Window},
+                                    Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="Developer"
+                                   FontSize="20" FontWeight="Light"
+                                   Foreground="{StaticResource DevModeAccent}"
+                                   Margin="0,0,0,4"/>
+                        <TextBlock Text="Internal tools and diagnostics. Not for end users."
+                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                   FontStyle="Italic" Margin="0,0,0,12"/>
+
+                        <!-- Diagnostics -->
+                        <TextBlock Text="Diagnostics" FontSize="13" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextSecondary}"
+                                   Margin="0,4,0,6"/>
+                        <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                                CornerRadius="6" Background="{StaticResource BgSecondary}"
+                                Padding="14,12" Margin="0,0,0,16">
+                            <StackPanel>
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Version" FontSize="13"
+                                               VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding AppVersion}"
+                                               FontSize="12" FontFamily="Consolas"
+                                               Foreground="{StaticResource TextTertiary}"
+                                               VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="Build date" FontSize="13"
+                                               VerticalAlignment="Center"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding BuildDate}"
+                                               FontSize="12" FontFamily="Consolas"
+                                               Foreground="{StaticResource TextTertiary}"
+                                               VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                                <StackPanel Margin="0,4,0,4">
+                                    <TextBlock Text="Working directory" FontSize="13"
+                                               Margin="0,0,0,2"/>
+                                    <TextBlock Text="{Binding WorkingDirectory}"
+                                               FontSize="11" FontFamily="Consolas"
+                                               Foreground="{StaticResource TextTertiary}"
+                                               TextWrapping="Wrap"/>
+                                </StackPanel>
+
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Throw test exception" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Verify that exception logging is wired up correctly"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Content="Throw"
+                                            Click="DevThrow_Click"
+                                            Padding="12,6" VerticalAlignment="Center"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Experimental tabs (Nav-Icons nur im Dev-Mode + Toggle) -->
+                        <TextBlock Text="Experimental tabs" FontSize="13" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextSecondary}"
+                                   Margin="0,4,0,6"/>
+                        <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                                CornerRadius="6" Background="{StaticResource BgSecondary}"
+                                Padding="14,12" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock Text="These nav icons only appear while Dev mode is on. Overlays already added to a layout keep working regardless."
+                                           FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                           FontStyle="Italic" TextWrapping="Wrap" Margin="0,0,0,8"/>
+
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Show Dashies" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="In-Honey config tab for the irDashies overlays"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding ShowDashies}"
+                                              Style="{StaticResource ToggleSwitch}"
+                                              VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                </Grid>
+
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Show Autostart" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Autostart icon in the navigation bar (work in progress)"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding ShowAutostart}"
+                                              Style="{StaticResource ToggleSwitch}"
+                                              VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                </Grid>
+
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Show Buttonbox" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Buttonbox icon in the navigation bar (work in progress)"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding ShowButtonbox}"
+                                              Style="{StaticResource ToggleSwitch}"
+                                              VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Preview -->
+                        <TextBlock Text="Preview" FontSize="13" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextSecondary}"
+                                   Margin="0,4,0,6"/>
+                        <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                                CornerRadius="6" Background="{StaticResource BgSecondary}"
+                                Padding="14,12" Margin="0,0,0,16">
+                            <StackPanel>
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Use Legacy Layout bar" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Off = new VR-Layouts sidebar (card style, hover-reveal, session tag). On = legacy Layout bar."
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding UseLegacyLayoutBar}"
+                                              Style="{StaticResource ToggleSwitch}"
+                                              VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Configs -->
+                        <TextBlock Text="Configs" FontSize="13" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextSecondary}"
+                                   Margin="0,4,0,6"/>
+                        <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                                CornerRadius="6" Background="{StaticResource BgSecondary}"
+                                Padding="14,12" Margin="0,0,0,16">
+                            <StackPanel>
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Force reload configs from disk" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Discards in-memory state and re-reads all JSON files"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Content="Reload"
+                                            Click="DevReloadConfigs_Click"
+                                            Padding="12,6" VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Open settings.json" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Edit the raw settings file (be careful)"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Content="Open"
+                                            Click="DevOpenSettingsFile_Click"
+                                            Padding="12,6" VerticalAlignment="Center"/>
+                                </Grid>
+
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Reset settings to defaults" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Layout JSON files are not affected"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Content="Reset"
+                                            Click="DevResetSettings_Click"
+                                            Padding="12,6" VerticalAlignment="Center"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Logging -->
+                        <TextBlock Text="Logging" FontSize="13" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextSecondary}"
+                                   Margin="0,4,0,6"/>
+                        <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                                CornerRadius="6" Background="{StaticResource BgSecondary}"
+                                Padding="14,12" Margin="0,0,0,16">
+                            <StackPanel>
+                                <TextBlock Text="Log level configuration will be available here in a later phase."
+                                           FontSize="12"
+                                           Foreground="{StaticResource TextTertiary}"
+                                           TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
+                    <!-- Spacer: damit die letzte Section auch oben anschlagen kann -->
+                    <Border x:Name="BottomSpacer" Height="0"/>
+
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</UserControl>

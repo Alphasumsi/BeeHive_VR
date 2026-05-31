@@ -1,0 +1,36 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>BeeHive_VR Atlas</title>
+  <style>
+    html, body { margin: 0; padding: 0; width: 1024px; height: 768px; overflow: hidden;
+                 background: #050510; font-family: sans-serif; color: #fff; }
+    .panel { position: absolute; box-sizing: border-box; overflow: hidden;
+             background: #101018; }
+    .panel iframe { width: 100%; height: 100%; border: 0; display: block; }
+
+    /* Static atlas packing — these rects MUST match DEFAULT_LAYOUT.rect* in main.ts.
+       The layer's QuadSlot.rectXYWH points at exactly these regions. */
+    #p1 { left:   0;   top:   0;   width: 512px;  height: 384px; }
+    #p2 { left: 512px; top:   0;   width: 512px;  height: 384px; }
+    #p3 { left:   0;   top: 384px; width: 1024px; height: 384px; }
+  </style>
+</head>
+<body>
+  <!-- Real dashies — the WPF process serves them on port 8723 via
+       IrdashiesAdapterService. If WPF is not running yet, the iframes
+       stay blank (the .fallback label peeks through). -->
+  <div class="panel" id="p1">
+    <iframe src="http://localhost:8723/honeyvr.html?widget=input"></iframe>
+  </div>
+  <div class="panel" id="p2">
+    <iframe src="http://localhost:8723/honeyvr.html?widget=map"></iframe>
+  </div>
+  <div class="panel" id="p3">
+    <iframe src="http://localhost:8723/honeyvr.html?widget=standings"></iframe>
+  </div>
+
+  <script type="module" src="/src/renderer.ts"></script>
+</body>
+</html>

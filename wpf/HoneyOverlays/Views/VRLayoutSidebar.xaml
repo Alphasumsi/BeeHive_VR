@@ -1,0 +1,372 @@
+<UserControl x:Class="HoneyOverlays.Views.VRLayoutSidebar"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:vm="clr-namespace:HoneyOverlays.ViewModels"
+             mc:Ignorable="d">
+
+    <!--
+        VRLayoutSidebar — Häppchen C + D komplett.
+        DataContext = MainViewModel (geerbt vom Window).
+        Interaktion:
+          - Single-Click   = Select (Edit-Cursor)
+          - Doppel-Click   = Set as active
+          - Rechts-Click   = Context-Menü
+          - Hover          = Stern + 3-Punkt-Icon einblenden
+          - Stern dauerhaft sichtbar bei Favoriten (außer Default)
+        States:
+          - Selected (Edit) = 3px Stripe links
+          - Active (LIVE)   = subtler Background-Tint
+          - P/Q/R/S-Pille   = nur am Active-Layout, abhängig vom OverlayContext
+    -->
+    <!-- Schwebende Karte im Dashies-Stil (BgSecondary, Rahmen rundum, abgerundet). -->
+    <Border Background="{StaticResource BgSecondary}"
+            BorderBrush="{StaticResource BorderTertiary}"
+            BorderThickness="1"
+            CornerRadius="6"
+            Margin="12,16,8,16">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="14,16,14,16">
+
+                <!-- Tab-Header — identisch zum "Overlays"-Header im Hauptbereich
+                     (Trennstrich unten + farbiger Akzent-Unterstrich unter dem Text). -->
+                <Border BorderBrush="{StaticResource BorderTertiary}"
+                        BorderThickness="0,0,0,1" Margin="0,0,0,10">
+                    <StackPanel Orientation="Horizontal">
+                        <Border Padding="14,8" BorderBrush="{StaticResource AccentText}"
+                                BorderThickness="0,0,0,2">
+                            <TextBlock Text="VR-Layouts" FontSize="15" FontWeight="SemiBold"/>
+                        </Border>
+                    </StackPanel>
+                </Border>
+
+                <ItemsControl ItemsSource="{Binding LayoutsView}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="{x:Type vm:CarLayoutViewModel}">
+                            <!-- Visibility-Wrapper: Default verbergen wenn AutoCreate=on
+                                 (interner Fallback bleibt funktional). -->
+                            <Border>
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                        <Style.Triggers>
+                                            <MultiDataTrigger>
+                                                <MultiDataTrigger.Conditions>
+                                                    <Condition Binding="{Binding IsDefault}" Value="True"/>
+                                                    <Condition Binding="{Binding DataContext.AutoCreateLayoutOnNewCar,
+                                                                                RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                               Value="True"/>
+                                                </MultiDataTrigger.Conditions>
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                            </MultiDataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                            <!-- Outer Wrapper für Trennstrich nach Default/letztem Favoriten -->
+                            <Border>
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="BorderBrush" Value="{StaticResource BorderTertiary}"/>
+                                        <Setter Property="BorderThickness" Value="0"/>
+                                        <Setter Property="Margin" Value="0"/>
+                                        <Setter Property="Padding" Value="0"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsDefault}" Value="True">
+                                                <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                                                <Setter Property="Margin" Value="0,0,0,4"/>
+                                                <Setter Property="Padding" Value="0,0,0,4"/>
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding IsLastFavorite}" Value="True">
+                                                <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                                                <Setter Property="Margin" Value="0,0,0,4"/>
+                                                <Setter Property="Padding" Value="0,0,0,4"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+
+                                <!-- Row-Container: Background = Active-Tint (RefEquals zu ActiveLayout) -->
+                                <Border x:Name="RowRoot"
+                                        MouseLeftButtonDown="Row_MouseLeftButtonDown"
+                                        MouseRightButtonUp="Row_MouseRightButtonUp"
+                                        Cursor="Hand">
+                                    <Border.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="Copy config"
+                                                      Click="LayoutMenu_Copy_Click">
+                                                <MenuItem.Icon>
+                                                    <Path Width="13" Height="13" Stretch="Uniform"
+                                                          Stroke="{StaticResource TextSecondary}" StrokeThickness="2"
+                                                          Fill="Transparent"
+                                                          Data="M9 9 H21 V21 H9 Z M5 15 H4 V4 H15 V5"/>
+                                                </MenuItem.Icon>
+                                            </MenuItem>
+                                            <MenuItem Header="Paste config"
+                                                      Click="LayoutMenu_Paste_Click">
+                                                <MenuItem.Icon>
+                                                    <Path Width="13" Height="13" Stretch="Uniform"
+                                                          Stroke="{StaticResource TextSecondary}" StrokeThickness="2"
+                                                          Fill="Transparent"
+                                                          Data="M16 4 H18 A2 2 0 0 1 20 6 V20 A2 2 0 0 1 18 22 H6 A2 2 0 0 1 4 20 V6 A2 2 0 0 1 6 4 H8 M8 2 H16 V6 H8 Z"/>
+                                                </MenuItem.Icon>
+                                            </MenuItem>
+                                            <Separator/>
+                                            <MenuItem Header="Delete layout"
+                                                      Foreground="{StaticResource DangerText}"
+                                                      Click="LayoutMenu_Delete_Click">
+                                                <MenuItem.Icon>
+                                                    <Path Width="13" Height="13" Stretch="Uniform"
+                                                          Stroke="{StaticResource DangerText}" StrokeThickness="2"
+                                                          Fill="Transparent"
+                                                          Data="M3 6 H21 M8 6 V4 A1 1 0 0 1 9 3 H15 A1 1 0 0 1 16 4 V6 M5 6 V20 A2 2 0 0 0 7 22 H17 A2 2 0 0 0 19 20 V6 M10 11 V17 M14 11 V17"/>
+                                                </MenuItem.Icon>
+                                            </MenuItem>
+                                        </ContextMenu>
+                                    </Border.ContextMenu>
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="Transparent"/>
+                                            <Setter Property="CornerRadius" Value="4"/>
+                                            <Style.Triggers>
+                                                <!-- Active-Tint (LIVE in VR) -->
+                                                <DataTrigger Value="True">
+                                                    <DataTrigger.Binding>
+                                                        <MultiBinding Converter="{StaticResource RefEqualsToBool}">
+                                                            <Binding/>
+                                                            <Binding Path="DataContext.ActiveLayout"
+                                                                     RelativeSource="{RelativeSource AncestorType=UserControl}"/>
+                                                        </MultiBinding>
+                                                    </DataTrigger.Binding>
+                                                    <Setter Property="Background"
+                                                            Value="{StaticResource AccentBgIntense}"/>
+                                                </DataTrigger>
+                                                <!-- Hover: subtle Tint, überschreibt Active nicht (Trigger-Reihenfolge) -->
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter Property="Background"
+                                                            Value="{StaticResource BgTertiary}"/>
+                                                </Trigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
+
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="3"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- Selected-Stripe links (Edit-Cursor) -->
+                                        <Border Grid.Column="0" Width="3"
+                                                CornerRadius="0,2,2,0">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Background" Value="Transparent"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Value="True">
+                                                            <DataTrigger.Binding>
+                                                                <MultiBinding Converter="{StaticResource RefEqualsToBool}">
+                                                                    <Binding/>
+                                                                    <Binding Path="DataContext.SelectedLayout"
+                                                                             RelativeSource="{RelativeSource AncestorType=UserControl}"/>
+                                                                </MultiBinding>
+                                                            </DataTrigger.Binding>
+                                                            <Setter Property="Background"
+                                                                    Value="{StaticResource AccentBgSolid}"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                        </Border>
+
+                                        <!-- Layout-Name -->
+                                        <TextBlock Grid.Column="1" Text="{Binding CarName}"
+                                                   FontSize="13" VerticalAlignment="Center"
+                                                   Margin="8,6,4,6"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding CarName}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsDefault}" Value="True">
+                                                            <Setter Property="FontStyle" Value="Italic"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Value="True">
+                                                            <DataTrigger.Binding>
+                                                                <MultiBinding Converter="{StaticResource RefEqualsToBool}">
+                                                                    <Binding/>
+                                                                    <Binding Path="DataContext.ActiveLayout"
+                                                                             RelativeSource="{RelativeSource AncestorType=UserControl}"/>
+                                                                </MultiBinding>
+                                                            </DataTrigger.Binding>
+                                                            <Setter Property="Foreground" Value="{StaticResource AccentText}"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+
+                                        <!-- P/Q/R/S-Pille (nur am Active-Layout, abhängig vom OverlayContext) -->
+                                        <Border Grid.Column="2"
+                                                Background="{StaticResource AccentBgSolid}"
+                                                CornerRadius="3"
+                                                Padding="5,1"
+                                                Margin="0,0,4,0"
+                                                VerticalAlignment="Center"
+                                                MinWidth="18">
+                                            <Border.Visibility>
+                                                <MultiBinding Converter="{StaticResource ActiveContextTag}" ConverterParameter="vis">
+                                                    <Binding/>
+                                                    <Binding Path="DataContext.ActiveLayout"
+                                                             RelativeSource="{RelativeSource AncestorType=UserControl}"/>
+                                                    <Binding Path="DataContext.CurrentOverlayContext"
+                                                             RelativeSource="{RelativeSource AncestorType=UserControl}"/>
+                                                </MultiBinding>
+                                            </Border.Visibility>
+                                            <TextBlock FontSize="10" FontWeight="Bold"
+                                                       Foreground="{StaticResource BgPrimary}"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center">
+                                                <TextBlock.Text>
+                                                    <MultiBinding Converter="{StaticResource ActiveContextTag}" ConverterParameter="text">
+                                                        <Binding/>
+                                                        <Binding Path="DataContext.ActiveLayout"
+                                                                 RelativeSource="{RelativeSource AncestorType=UserControl}"/>
+                                                        <Binding Path="DataContext.CurrentOverlayContext"
+                                                                 RelativeSource="{RelativeSource AncestorType=UserControl}"/>
+                                                    </MultiBinding>
+                                                </TextBlock.Text>
+                                            </TextBlock>
+                                        </Border>
+
+                                        <!-- Set-active-Pin: gleiches Verhalten wie der Fav-Stern.
+                                             Bei Hover ausgegraut sichtbar, dauerhaft gefüllt wenn dieses
+                                             Layout aktiv ist. Click toggelt aktiv/inaktiv.
+                                             Bei Default-Layout ausgeblendet. -->
+                                        <Button Grid.Column="3" Width="22" Height="22"
+                                                Click="LayoutPin_Click"
+                                                Tag="{Binding}"
+                                                ToolTip="Set as active layout">
+                                            <Button.Style>
+                                                <Style TargetType="Button" BasedOn="{StaticResource IconButton}">
+                                                    <Setter Property="Opacity" Value="0"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Value="True">
+                                                            <DataTrigger.Binding>
+                                                                <MultiBinding Converter="{StaticResource RefEqualsToBool}" FallbackValue="False">
+                                                                    <Binding/>
+                                                                    <Binding Path="DataContext.ActiveLayout"
+                                                                             RelativeSource="{RelativeSource AncestorType=UserControl}"/>
+                                                                </MultiBinding>
+                                                            </DataTrigger.Binding>
+                                                            <Setter Property="Opacity" Value="1"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding IsMouseOver, ElementName=RowRoot}" Value="True">
+                                                            <Setter Property="Opacity" Value="1"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding IsDefault}" Value="True">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Button.Style>
+                                            <Path Width="13" Height="13" Stretch="Uniform"
+                                                  StrokeThickness="2"
+                                                  Data="M16 9V4 H8 V9 L5 12 V14 H19 V12 Z M11 14 V21 L12 22 L13 21 V14">
+                                                <Path.Style>
+                                                    <Style TargetType="Path">
+                                                        <Setter Property="Stroke" Value="{StaticResource TextTertiary}"/>
+                                                        <Setter Property="Fill"   Value="Transparent"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Value="True">
+                                                                <DataTrigger.Binding>
+                                                                    <MultiBinding Converter="{StaticResource RefEqualsToBool}" FallbackValue="False">
+                                                                        <Binding/>
+                                                                        <Binding Path="DataContext.ActiveLayout"
+                                                                                 RelativeSource="{RelativeSource AncestorType=UserControl}"/>
+                                                                    </MultiBinding>
+                                                                </DataTrigger.Binding>
+                                                                <Setter Property="Stroke" Value="{StaticResource PinText}"/>
+                                                                <Setter Property="Fill"   Value="{StaticResource PinText}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Path.Style>
+                                            </Path>
+                                        </Button>
+
+                                        <!-- Favoriten-Stern: bei Hover sichtbar, dauerhaft wenn IsFavorite.
+                                             Bei Default-Layout komplett ausgeblendet. -->
+                                        <Button Grid.Column="4" Width="22" Height="22"
+                                                Click="ToggleFavorite_Click"
+                                                ToolTip="Toggle favorite">
+                                            <Button.Style>
+                                                <Style TargetType="Button" BasedOn="{StaticResource IconButton}">
+                                                    <Setter Property="Opacity" Value="0"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsFavorite}" Value="True">
+                                                            <Setter Property="Opacity" Value="1"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding IsMouseOver, ElementName=RowRoot}" Value="True">
+                                                            <Setter Property="Opacity" Value="1"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding IsDefault}" Value="True">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Button.Style>
+                                            <Path Width="13" Height="13" Stretch="Uniform"
+                                                  StrokeThickness="2"
+                                                  Data="M12 2 L15.09 8.26 L22 9.27 L17 14.14 L18.18 21.02 L12 17.77 L5.82 21.02 L7 14.14 L2 9.27 L8.91 8.26 Z">
+                                                <Path.Style>
+                                                    <Style TargetType="Path">
+                                                        <Setter Property="Stroke" Value="{StaticResource TextTertiary}"/>
+                                                        <Setter Property="Fill"   Value="Transparent"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsFavorite}" Value="True">
+                                                                <Setter Property="Stroke" Value="{StaticResource AccentText}"/>
+                                                                <Setter Property="Fill"   Value="{StaticResource AccentBgSolid}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Path.Style>
+                                            </Path>
+                                        </Button>
+
+                                        <!-- 3-Punkt-Menü: nur bei Hover sichtbar, öffnet ContextMenu der Zeile -->
+                                        <Button Grid.Column="5" Width="22" Height="22"
+                                                Click="LayoutMenu_Click"
+                                                ToolTip="Layout actions">
+                                            <Button.Style>
+                                                <Style TargetType="Button" BasedOn="{StaticResource IconButton}">
+                                                    <Setter Property="Opacity" Value="0"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsMouseOver, ElementName=RowRoot}" Value="True">
+                                                            <Setter Property="Opacity" Value="1"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Button.Style>
+                                            <Path Data="M5,12 A1,1 0 1,1 5,12.01 Z M12,12 A1,1 0 1,1 12,12.01 Z M19,12 A1,1 0 1,1 19,12.01 Z"
+                                                  Stretch="Uniform" Fill="{StaticResource TextSecondary}"
+                                                  Width="14" Height="14"/>
+                                        </Button>
+
+                                    </Grid>
+                                </Border>
+                            </Border>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+            </StackPanel>
+        </ScrollViewer>
+    </Border>
+</UserControl>
