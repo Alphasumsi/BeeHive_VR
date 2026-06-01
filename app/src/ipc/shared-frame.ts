@@ -1,8 +1,8 @@
-// Win32-Shared-Memory + Named-Event publisher for BeeHive_VR.
+// Win32-Shared-Memory publisher for BeeHive_VR.
 //
-// Talks to the OpenXR layer (engine/xr-api-beehive) via a named file mapping +
-// auto-reset event. The layer reads the FrameSlot on first xrEndFrame (step 1)
-// and will block on the event per frame in step 2.
+// Talks to the OpenXR layer (engine/xr-api-beehive) via a named file mapping.
+// The layer polls the FrameSlot from xrEndFrame — WGC has its own sync model
+// (free-threaded frame pool), so no event signalling is needed.
 //
 // koffi 3 idiom: HANDLE = pointer-to-opaque, returned/passed as BigInt. We
 // write into the mapped memory via koffi.encode() rather than koffi.view()
@@ -16,12 +16,12 @@ const kernel32 = koffi.load('kernel32.dll');
 const HANDLE = koffi.pointer('HANDLE', koffi.opaque());
 
 // FrameSlot — byte-for-byte match with the C++ layer (40 bytes).
-// Describes the atlas texture itself. The QuadSlot array sits behind it.
+// Describes the atlas source window. The QuadSlot array sits behind it.
 const FrameSlot = koffi.struct('FrameSlot', {
   generation:  'uint64_t',
   producerPid: 'uint32_t',
   reserved:    'uint32_t',
-  ntHandle:    'uint64_t',
+  hwnd:        'uint64_t',  // BrowserWindow HWND that WGC captures
   width:       'uint32_t',
   height:      'uint32_t',
   format:      'uint32_t',
@@ -64,10 +64,6 @@ const MapViewOfFile = kernel32.func(
   'uint32_t dwFileOffsetHigh, uint32_t dwFileOffsetLow, size_t dwNumberOfBytesToMap)');
 const UnmapViewOfFile = kernel32.func('bool __stdcall UnmapViewOfFile(void* lpBaseAddress)');
 const CloseHandle = kernel32.func('bool __stdcall CloseHandle(HANDLE hObject)');
-const CreateEventW = kernel32.func(
-  'HANDLE __stdcall CreateEventW(void* lpEventAttributes, bool bManualReset, bool bInitialState, ' +
-  'str16 lpName)');
-const SetEvent = kernel32.func('bool __stdcall SetEvent(HANDLE hEvent)');
 const CreateMutexW = kernel32.func(
   'HANDLE __stdcall CreateMutexW(void* lpMutexAttributes, bool bInitialOwner, str16 lpName)');
 const GetLastError = kernel32.func('uint32_t __stdcall GetLastError()');
@@ -87,14 +83,13 @@ function ptr(v: unknown): bigint {
 
 // Names (keep in sync with the layer + the BeeHive_VR naming convention).
 const NAME_MAPPING = 'Local\\BeeHiveVR_Frame';
-const NAME_EVENT   = 'Local\\BeeHiveVR_FrameReady';
 const NAME_MUTEX   = 'Global\\BeeHiveVR_Instance';
 
 export interface FramePublish {
-  ntHandle: bigint;   // raw NT HANDLE from Electron's offscreen shared texture
+  hwnd:     bigint;   // BrowserWindow HWND that the layer will WGC-capture
   width:    number;   // atlas width in pixels
   height:   number;   // atlas height in pixels
-  format:   number;   // DXGI_FORMAT (e.g. 87 = B8G8R8A8_UNORM)
+  format:   number;   // DXGI_FORMAT advertised to the layer (informational)
 }
 
 // One sub-region of the atlas. id is for human debugging only; layer doesn't
@@ -121,7 +116,6 @@ class SharedFrameChannel {
   // koffi 3 pointers are BigInt; 0n means NULL / "not opened".
   private mapping: bigint = 0n;
   private mapView: bigint = 0n;
-  private event:   bigint = 0n;
   private generation = 0n;
 
   open(): void {
@@ -134,11 +128,6 @@ class SharedFrameChannel {
     if (!v) throw new Error(`MapViewOfFile failed err=${GetLastError()}`);
     this.mapView = v;
 
-    // Manual-reset = false → auto-reset (consumer only sees one signal per pulse).
-    const e = ptr(CreateEventW(null, false, false, NAME_EVENT));
-    if (!e) throw new Error(`CreateEventW failed err=${GetLastError()}`);
-    this.event = e;
-
     // Zero the whole mapping so a stale slot from a previous process does not
     // confuse the layer.
     this.zeroAll();
@@ -148,7 +137,7 @@ class SharedFrameChannel {
     if (!this.mapView) return;
     koffi.encode(this.mapView, FrameSlot, {
       generation: 0n, producerPid: 0, reserved: 0,
-      ntHandle: 0n, width: 0, height: 0, format: 0, quadCount: 0,
+      hwnd: 0n, width: 0, height: 0, format: 0, quadCount: 0,
     });
     const empty = {
       id: '',
@@ -174,7 +163,7 @@ class SharedFrameChannel {
       generation:  this.generation,
       producerPid: process.pid,
       reserved:    0,
-      ntHandle:    f.ntHandle,
+      hwnd:        f.hwnd,
       width:       f.width,
       height:      f.height,
       format:      f.format,
@@ -203,8 +192,6 @@ class SharedFrameChannel {
         reserved: 0,
       });
     }
-
-    SetEvent(this.event);
   }
 
   close(): void {
@@ -214,7 +201,6 @@ class SharedFrameChannel {
       this.mapView = 0n;
     }
     if (this.mapping) { CloseHandle(this.mapping); this.mapping = 0n; }
-    if (this.event)   { CloseHandle(this.event);   this.event   = 0n; }
   }
 }
 

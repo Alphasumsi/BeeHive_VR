@@ -1,10 +1,10 @@
 // BeeHive_VR — OpenXR API layer (XR_APILAYER_NOVENDOR_beehive)
 //
-// Step 3: multi-region atlas. The shared mapping carries a FrameSlot (describes
-// the atlas texture) followed by an array of QuadSlot entries (one per sub-
-// region: rect within the atlas, pose, size). Layer copies the whole atlas
-// into the swapchain image once per frame, then emits one XrCompositionLayerQuad
-// per QuadSlot — each with its own imageRect, pose, and size.
+// Architecture: Electron renders the atlas into a cloaked top-level
+// BrowserWindow on the desktop and publishes its HWND in shared memory. This
+// layer captures that window through Windows.Graphics.Capture, copies the
+// surface into a swapchain image, and emits one XrCompositionLayerQuad per
+// sub-region (pose + size + atlas rect from the QuadSlot array).
 //
 // FrameSlot is 40 bytes, QuadSlot is 76 bytes, MAX_QUADS = 8 → mapping = 648.
 //
@@ -15,8 +15,7 @@
 
 #include "layer.h"
 #include <log.h>
-#include <unordered_map>
-#include <deque>
+#include <utils/capture.h>
 #include <array>
 
 namespace openxr_api_layer {
@@ -76,14 +75,6 @@ namespace openxr_api_layer {
             }
 
             m_appDevice->GetImmediateContext(m_appContext.ReleaseAndGetAddressOf());
-            HRESULT hr = m_appDevice->QueryInterface(IID_PPV_ARGS(m_appDevice1.ReleaseAndGetAddressOf()));
-            if (FAILED(hr)) {
-                Log(fmt::format("xrCreateSession: QueryInterface ID3D11Device1 failed hr=0x{:08x}\n",
-                                (uint32_t)hr));
-                m_appDevice = nullptr;
-                return result;
-            }
-
             m_session = *session;
             Log("xrCreateSession: captured app D3D11 device, awaiting first xrEndFrame for setup\n");
             return result;
@@ -95,7 +86,6 @@ namespace openxr_api_layer {
                 Teardown();
                 m_session = XR_NULL_HANDLE;
                 m_appDevice = nullptr;
-                m_appDevice1.Reset();
                 m_appContext.Reset();
             }
             return OpenXrApi::xrDestroySession(session);
@@ -114,8 +104,7 @@ namespace openxr_api_layer {
             m_frameCount++;
             if (m_frameCount == 1) Log("xrEndFrame: first call\n");
             if (m_frameCount % 450 == 0) {
-                Log(fmt::format("xrEndFrame: frame #{} cache={} \n",
-                                m_frameCount, m_handleCache.size()));
+                Log(fmt::format("xrEndFrame: frame #{}\n", m_frameCount));
             }
 
             XrFrameEndInfo chained = *frameEndInfo;
@@ -151,7 +140,7 @@ namespace openxr_api_layer {
             uint64_t generation;
             uint32_t producerPid;
             uint32_t reserved;
-            uint64_t ntHandle;
+            uint64_t hwnd;            // Electron BrowserWindow HWND for WGC
             uint32_t width;
             uint32_t height;
             uint32_t format;
@@ -176,11 +165,32 @@ namespace openxr_api_layer {
         static constexpr size_t kMaxQuads = 8;
         static constexpr size_t kMappingSize = sizeof(FrameSlot) + kMaxQuads * sizeof(QuadSlot);
 
+        // ~half a second at 90 Hz — covers iRacing's loading-screen window
+        // without noticeably delaying the appearance of the overlay in-cockpit.
+        static constexpr uint64_t kSetupHoldoffFrames = 45;
+
         // ---------- Setup ------------------------------------------------------
         // Idempotent: every xrEndFrame calls this until everything is ready.
         // Returns true once swapchain + space + first cached texture are in.
+        //
+        // Hold-off rationale: WGC bring-up (CreateForWindow + free-threaded
+        // frame pool + StartCapture) is heavyweight WinRT/COM work. Running it
+        // during iRacing's loading phase reliably wedges the loader (analogue
+        // to the OpenXR-from-xrCreateInstance trap). The old HoneyOverlays
+        // layer got the same effect for free because it waited on a named-pipe
+        // snapshot from WPF before touching WGC; we publish into shared memory
+        // immediately, so we have to hold off explicitly. ~half a second of
+        // pass-through is enough for iRacing to finish loading the cockpit.
         bool EnsureSetup() {
             if (m_swapchainReady) return true;
+            if (m_frameCount < kSetupHoldoffFrames) {
+                if (!m_loggedHoldoff) {
+                    Log(fmt::format("setup: holding off until xrEndFrame #{}\n",
+                                    kSetupHoldoffFrames));
+                    m_loggedHoldoff = true;
+                }
+                return false;
+            }
 
             // (a) Open the shared-memory section Electron created. Keep it mapped
             //     for the lifetime of the session so we can read every frame.
@@ -207,32 +217,53 @@ namespace openxr_api_layer {
             FrameSlot slot{};
             memcpy(&slot, m_mapView, sizeof(slot));
             if (slot.generation == 0 || slot.producerPid == 0 ||
-                slot.ntHandle == 0 || !slot.width || !slot.height) {
+                slot.hwnd == 0 || !slot.width || !slot.height) {
                 return false;
             }
 
-            Log(fmt::format("setup: first slot gen={} pid={} h=0x{:x} {}x{} fmt={}\n",
-                            slot.generation, slot.producerPid, slot.ntHandle,
-                            slot.width, slot.height, slot.format));
+            // (c) Start WGC capture against Electron's window — ONCE. The
+            //     ctor builds an interop D3D11 device wrapping our app device,
+            //     creates a free-threaded frame pool, and starts the session.
+            //     Re-entrancy guard: if EnsureSetup later returns false (e.g.
+            //     WGC needs another frame to deliver), the same session keeps
+            //     running on subsequent xrEndFrame calls.
+            if (!m_captureWindow) {
+                Log(fmt::format("setup: first slot gen={} pid={} hwnd=0x{:x} {}x{} fmt={}\n",
+                                slot.generation, slot.producerPid, slot.hwnd,
+                                slot.width, slot.height, slot.format));
+                m_capturedHwnd = (HWND)(uintptr_t)slot.hwnd;
+                try {
+                    m_captureWindow =
+                        std::make_unique<capture::CaptureWindowWinRT>(m_appDevice, m_capturedHwnd);
+                } catch (const winrt::hresult_error& e) {
+                    Log(fmt::format("setup: CaptureWindowWinRT ctor failed hr=0x{:08x} ({})\n",
+                                    (uint32_t)e.code().value,
+                                    winrt::to_string(e.message())));
+                    m_capturedHwnd = nullptr;
+                    return false;
+                }
+            }
 
-            // (c) Open Electron's process once; we'll keep PROCESS_DUP_HANDLE for
-            //     the duration of the session and use it for every cache miss.
-            m_parentProcess = OpenProcess(PROCESS_DUP_HANDLE, FALSE, slot.producerPid);
-            if (!m_parentProcess) {
-                Log(fmt::format("setup: OpenProcess(pid={}) failed err={}\n",
-                                slot.producerPid, GetLastError()));
+            // (d) Wait for the first captured frame before sizing our swapchain.
+            //     WGC reports the source size on the GraphicsCaptureItem but the
+            //     first TryGetNextFrame can return nullptr for ~1-2 frames after
+            //     StartCapture. Pull until we have something, then take that
+            //     surface's actual dimensions.
+            ID3D11Texture2D* firstFrame = m_captureWindow->getSurface();
+            if (!firstFrame) {
+                if (!m_loggedAwaitingFrame) {
+                    Log("setup: WGC capture session created, awaiting first frame\n");
+                    m_loggedAwaitingFrame = true;
+                }
                 return false;
             }
-            m_producerPid = slot.producerPid;
-            m_texWidth    = slot.width;
-            m_texHeight   = slot.height;
-            m_texFormat   = (DXGI_FORMAT)slot.format;
-
-            // (d) Seed the cache with the first handle we'll be using.
-            if (!OpenAndCacheTexture(slot.ntHandle)) {
-                CloseHandle(m_parentProcess); m_parentProcess = nullptr;
-                return false;
-            }
+            D3D11_TEXTURE2D_DESC desc{};
+            firstFrame->GetDesc(&desc);
+            m_texWidth  = desc.Width;
+            m_texHeight = desc.Height;
+            m_texFormat = desc.Format;
+            Log(fmt::format("setup: first WGC frame received {}x{} fmt={}\n",
+                            m_texWidth, m_texHeight, (int)m_texFormat));
 
             // (e) ReferenceSpace LOCAL — fixed quad pose.
             XrReferenceSpaceCreateInfo rsi{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
@@ -275,62 +306,14 @@ namespace openxr_api_layer {
             return true;
         }
 
-        // Opens a shared NT-HANDLE coming from Electron, resolves it to an
-        // ID3D11Texture2D, and stores it in m_handleCache. Returns true on
-        // success. After OpenSharedResource1 the duplicated handle can be
-        // closed: the COM ptr holds the underlying resource alive.
-        bool OpenAndCacheTexture(uint64_t handleVal) {
-            HANDLE dup = nullptr;
-            const BOOL ok = DuplicateHandle(m_parentProcess, (HANDLE)(uintptr_t)handleVal,
-                                            GetCurrentProcess(), &dup, 0, FALSE,
-                                            DUPLICATE_SAME_ACCESS);
-            if (!ok || !dup) {
-                Log(fmt::format("cache: DuplicateHandle(0x{:x}) failed err={}\n",
-                                handleVal, GetLastError()));
-                return false;
-            }
-            ComPtr<ID3D11Texture2D> tex;
-            const HRESULT hr = m_appDevice1->OpenSharedResource1(dup, IID_PPV_ARGS(&tex));
-            CloseHandle(dup);
-            if (FAILED(hr)) {
-                Log(fmt::format("cache: OpenSharedResource1(0x{:x}) hr=0x{:08x}\n",
-                                handleVal, (uint32_t)hr));
-                return false;
-            }
-            m_handleCache.emplace(handleVal, tex);
-            m_cacheOrder.push_back(handleVal);
-
-            // FIFO eviction: bound at kMaxCacheSize so we do not hold the
-            // entire long-tail of Chromium's handles open forever. Evicting
-            // releases the ComPtr ref, allowing the GPU resource to be freed
-            // once Chromium's own ref is gone.
-            while (m_handleCache.size() > kMaxCacheSize) {
-                const uint64_t oldest = m_cacheOrder.front();
-                m_cacheOrder.pop_front();
-                m_handleCache.erase(oldest);
-            }
-
-            if (m_handleCache.size() <= 8 || m_handleCache.size() % 8 == 0) {
-                Log(fmt::format("cache: opened 0x{:x} (size now {})\n",
-                                handleVal, m_handleCache.size()));
-            }
-            return true;
-        }
-
-        // Reads the current FrameSlot and returns the cached texture for its
-        // ntHandle (opening + caching if this is the first time we see it).
-        // Returns nullptr if the slot is unpopulated or the open failed.
+        // Returns the latest WGC-captured surface, or nullptr if the pool has
+        // not produced a frame this cycle. The CaptureWindowWinRT caches the
+        // last surface internally so consecutive calls without a fresh frame
+        // still return the previous one — that is the desired behaviour for
+        // VR (no holes, just a tiny re-show of the last frame).
         ID3D11Texture2D* GetCurrentTexture() {
-            if (!m_mapView) return nullptr;
-            FrameSlot slot{};
-            memcpy(&slot, m_mapView, sizeof(slot));
-            if (!slot.ntHandle) return nullptr;
-
-            auto it = m_handleCache.find(slot.ntHandle);
-            if (it != m_handleCache.end()) return it->second.Get();
-
-            if (!OpenAndCacheTexture(slot.ntHandle)) return nullptr;
-            return m_handleCache[slot.ntHandle].Get();
+            if (!m_captureWindow) return nullptr;
+            return m_captureWindow->getSurface();
         }
 
         void Teardown() {
@@ -344,13 +327,14 @@ namespace openxr_api_layer {
                 OpenXrApi::xrDestroySpace(m_localSpace);
                 m_localSpace = XR_NULL_HANDLE;
             }
-            m_handleCache.clear();
-            m_cacheOrder.clear();
+            m_captureWindow.reset();
+            m_capturedHwnd = nullptr;
             if (m_mapView)        { UnmapViewOfFile(m_mapView); m_mapView = nullptr; }
             if (m_mapping)        { CloseHandle(m_mapping);     m_mapping = nullptr; }
-            if (m_parentProcess)  { CloseHandle(m_parentProcess); m_parentProcess = nullptr; }
             m_texWidth = m_texHeight = 0;
             m_loggedNoMapping = false;
+            m_loggedAwaitingFrame = false;
+            m_loggedHoldoff = false;
             m_loggedFirstQuads = false;
         }
 
@@ -440,7 +424,6 @@ namespace openxr_api_layer {
         bool m_bypassApiLayer{false};
         XrSession m_session{XR_NULL_HANDLE};
         ID3D11Device* m_appDevice{nullptr};            // app-owned, not refcounted by us
-        ComPtr<ID3D11Device1> m_appDevice1;
         ComPtr<ID3D11DeviceContext> m_appContext;
 
         // Frame stats.
@@ -451,21 +434,17 @@ namespace openxr_api_layer {
         void*  m_mapView{nullptr};
         bool   m_loggedNoMapping{false};
 
-        // Cached Electron process handle (PROCESS_DUP_HANDLE) for fast misses.
-        HANDLE m_parentProcess{nullptr};
-        DWORD  m_producerPid{0};
-
-        // Per-handle texture cache. ComPtr keeps the underlying D3D11 resource
-        // alive on our side; the duplicated NT handle is closed after open.
-        // FIFO eviction at kMaxCacheSize prevents unbounded growth — Chromium
-        // can allocate fresh slots as we let old ones go.
-        static constexpr size_t kMaxCacheSize = 64;
-        std::unordered_map<uint64_t, ComPtr<ID3D11Texture2D>> m_handleCache;
-        std::deque<uint64_t> m_cacheOrder;
+        // WGC capture against Electron's BrowserWindow HWND. The session
+        // started by CaptureWindowWinRT owns a free-threaded frame pool and
+        // produces ID3D11Texture2D surfaces on the device we hand in.
+        std::unique_ptr<capture::ICaptureWindow> m_captureWindow;
+        HWND m_capturedHwnd{nullptr};
 
         // Quad pipeline state.
         bool m_swapchainReady{false};
         bool m_loggedAcquireFail{false};
+        bool m_loggedAwaitingFrame{false};
+        bool m_loggedHoldoff{false};
         bool m_loggedFirstQuads{false};
         UINT m_texWidth{0};
         UINT m_texHeight{0};
