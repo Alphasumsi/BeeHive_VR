@@ -124,6 +124,12 @@ public sealed class IrdashiesAdapterService
         _sdk.Start();
 
         _ = Task.Run(() => ListenLoopAsync(_cts.Token));
+
+        // BeeHive_VR (1.6.2026): solange iRacing nicht verbunden ist, treiben
+        // wir die Dashies mit Static-Mock-Daten. OnSdkConnected / -Disconnected
+        // togglen den Schalter automatisch.
+        SetMockStatic(true);
+
         Logger.Info($"IrdashiesAdapter: läuft auf http://localhost:{Port}/");
     }
 
@@ -153,6 +159,8 @@ public sealed class IrdashiesAdapterService
     {
         _isRunning = true;
         _realConnected = true; // echtes iRacing gewinnt → Mock pausiert automatisch
+        // BeeHive_VR: static-Mock-Fallback aus, sobald echtes iRacing da ist.
+        SetMockStatic(false);
         BroadcastFireAndForget(new { type = "runningState", data = true });
         Logger.Info("IrdashiesAdapter: iRacing verbunden");
     }
@@ -163,6 +171,9 @@ public sealed class IrdashiesAdapterService
         _realConnected = false;
         _latestTelemetryBytes = null;
         _latestSessionElement = null;
+        // BeeHive_VR: kein iRacing → static-Mock an, damit die Dashies in VR
+        // nicht leerlaufen (IsOnTrack=true, feste Demo-Werte).
+        SetMockStatic(true);
         // Bei aktivem Mock bleibt „running" true (Mock-Loop sendet weiter).
         BroadcastFireAndForget(new { type = "runningState", data = MockEnabled });
         Logger.Info("IrdashiesAdapter: iRacing getrennt");

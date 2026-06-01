@@ -82,32 +82,9 @@ namespace HoneyOverlays
 
             base.OnStartup(e);
 
-            // Crash-Recovery: leftover browser-host.exe-Prozesse aus früheren WPF-Sessions killen.
-            // Bei sauberem Exit gibt's keine, bei Crash/Force-Quit räumt's auf damit kein Duplikat
-            // beim Spawn entsteht.
-            try
-            {
-                foreach (var p in System.Diagnostics.Process.GetProcessesByName("browser-host"))
-                {
-                    try
-                    {
-                        p.Kill(entireProcessTree: true);
-                        Logger.Info($"Cleanup: killed orphan browser-host pid={p.Id}");
-                    }
-                    catch (System.Exception ex)
-                    {
-                        Logger.Warn($"Cleanup: failed to kill browser-host pid={p.Id}: {ex.Message}");
-                    }
-                    finally
-                    {
-                        p.Dispose();
-                    }
-                }
-            }
-            catch (System.Exception ex)
-            {
-                Logger.Warn($"Cleanup: process enumeration failed: {ex.Message}");
-            }
+            // BeeHive_VR (1.6.2026): browser-host.exe ist tot — Atlas wird vom
+            // Electron-Prozess gerendert, keine Honey-Hosts mehr zu killen.
+            // Cleanup-Block übersprungen.
 
             // iRacing-Service starten (Häppchen 1: Skelett, noch keine Connection)
             IRacingService.Instance.Start();
@@ -125,8 +102,9 @@ namespace HoneyOverlays
             // // Läuft im WPF-Prozess — Toolhelp32 hier sicher (im Layer crasht es iRacing).
             // HostStatsPoller.Instance.Start();
 
-            // Content-Size-Reporter (Schritt 11e): watcht %TEMP% auf browser-host-Messungen
-            BrowserHostSizeReporter.Instance.Start();
+            // BeeHive_VR: BrowserHostSizeReporter überwacht %TEMP%\vroverlay-host-*.size,
+            // die niemand mehr schreibt. Start auskommentiert; Service-Body ist No-op.
+            // BrowserHostSizeReporter.Instance.Start();
 
             // Globaler Keybind-Input-Hook (Keyboard + HID, hintergrundfähig)
             RawInputService.Instance.Start();
@@ -315,13 +293,14 @@ namespace HoneyOverlays
         {
             TrayIconService.Instance.Dispose();
             TradingPaintsService.Instance.Stop();
-            IrdashiesPreviewService.Instance.Close();
+            // BeeHive_VR: Honey-Pipeline-Services sind stillgelegt — IrdashiesPreviewService
+            // spawnt browser-host, BrowserHostSizeReporter watcht eine tote Pipe,
+            // BrowserHostManager verwaltet nicht-mehr-existente Hosts.
+            // IrdashiesPreviewService.Instance.Close();
             IrdashiesAdapterService.Instance.Stop();
             RawInputService.Instance.Stop();
-            BrowserHostSizeReporter.Instance.Stop();
-            // PERF-WORK DEAKTIVIERT (Chat 30.5.2026)
-            // HostStatsPoller.Instance.Stop();
-            BrowserHostManager.Instance.StopAll();
+            // BrowserHostSizeReporter.Instance.Stop();
+            // BrowserHostManager.Instance.StopAll();
             EngineLink.Instance.Stop();
             IRacingService.Instance.Stop();
             try { _instanceMutex?.ReleaseMutex(); } catch { }

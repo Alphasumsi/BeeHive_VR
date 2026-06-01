@@ -60,13 +60,12 @@ class WpfLink extends EventEmitter {
       this.drain();
     });
 
-    s.on('error', (err) => {
-      // Most errors here are "no pipe yet" or "pipe closed" — log once per cycle.
+    s.on('error', (err: NodeJS.ErrnoException) => {
+      // Most errors here are "no pipe yet" (ENOENT) or "pipe closed" — log
+      // anything else once per reconnect cycle, swallow the noise.
       if (this.stopped) return;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const code = (err as any).code;
-      if (code !== 'ENOENT') {
-        console.warn('[wpf-link] socket error:', code || err.message);
+      if (err.code !== 'ENOENT') {
+        console.warn('[wpf-link] socket error:', err.code || err.message);
       }
     });
 

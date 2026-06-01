@@ -1,4 +1,3 @@
-using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Diagnostics;
 using System.IO;
@@ -69,25 +68,6 @@ public partial class DebugPage : UserControl
         {
             Logger.Error("Failed to open log file in editor", ex);
         }
-    }
-
-    // Step 4b test trigger — cycles through three preset poses so each click
-    // visibly moves the test atlas in VR. Useful to verify the WPF → Electron
-    // → Layer pipe end-to-end without any UI wiring yet.
-    private int _testStep;
-    private void SendTestAtlasLayout_Click(object sender, RoutedEventArgs e)
-    {
-        _testStep = (_testStep + 1) % 3;
-        // Three preset offsets; only X varies on p1 to make movement obvious.
-        float p1X = -0.6f + 0.2f * _testStep;   // -0.6 / -0.4 / -0.2
-        var quads = new List<AtlasQuadDto>
-        {
-            new() { Id = "p1", PosX = p1X, PosY = 0.0f,  PosZ = -1.0f, SizeW = 0.40f, SizeH = 0.30f },
-            new() { Id = "p2", PosX = 0.6f, PosY = 0.0f,  PosZ = -1.0f, SizeW = 0.40f, SizeH = 0.30f },
-            new() { Id = "p3", PosX = 0.0f, PosY = -0.35f, PosZ = -1.0f, SizeW = 0.80f, SizeH = 0.30f },
-        };
-        EngineLink.Instance.PushAtlasLayout(quads);
-        Logger.Info($"DebugPage: pushed setAtlasLayout (step {_testStep}, p1.X={p1X:F2}, connected={EngineLink.Instance.IsConnected})");
     }
 
     private void CopyLog_Click(object sender, RoutedEventArgs e)

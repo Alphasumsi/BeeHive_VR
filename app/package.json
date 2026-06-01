@@ -1,8 +1,8 @@
 {
-  "name": "app",
-  "productName": "app",
-  "version": "1.0.0",
-  "description": "My Electron application description",
+  "name": "beehive-vr-atlas",
+  "productName": "BeeHive_VR Atlas",
+  "version": "0.1.0",
+  "description": "BeeHive_VR — Electron Atlas-Renderer for iRacing dashies in VR",
   "main": ".vite/build/main.js",
   "private": true,
   "scripts": {

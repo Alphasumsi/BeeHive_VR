@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -713,6 +714,59 @@ public partial class MainViewModel : ObservableObject
             }
             : s).ToList();
         EngineLink.Instance.PushLayout(enginePayload);
+
+        // BeeHive_VR atlas — same trigger, new wire format. Electron consumes
+        // this; the old layer never saw it. See PushAtlasLayout / wpf-link.ts.
+        EngineLink.Instance.PushAtlasLayout(BuildAtlasQuads(sources));
+    }
+
+    // STUB id-mapping: WPF source ids are user-defined and don't yet match the
+    // atlas-rect ids hardcoded in app/src/main.ts (p1/p2/p3). Until #3
+    // (dynamische Dashie-Auswahl) lands, the first three sources get bound
+    // to those slots by index. Visible-but-overflow sources are dropped.
+    private static readonly string[] AtlasSlotIds = { "p1", "p2", "p3" };
+
+    private static IEnumerable<AtlasQuadDto> BuildAtlasQuads(IEnumerable<SourceModel> sources)
+    {
+        int i = 0;
+        foreach (var s in sources)
+        {
+            if (i >= AtlasSlotIds.Length) yield break;
+            var (qx, qy, qz, qw) = YawPitchToQuat(s.Yaw, s.Pitch);
+
+            // Scale = quad width in meters (alter Layer-Vertrag). Height aus
+            // Pixel-Aspect ableiten; ohne Aspekt 4:3 als Fallback.
+            float widthM  = MathF.Max(s.Scale, 0.01f);
+            float aspect  = s.PixelWidth > 0 && s.PixelHeight > 0
+                ? (float)s.PixelHeight / s.PixelWidth
+                : 3.0f / 4.0f;
+            float heightM = widthM * aspect;
+
+            yield return new AtlasQuadDto
+            {
+                Id      = AtlasSlotIds[i++],
+                PosX    = s.X, PosY = s.Y, PosZ = s.Z,
+                QuatX   = qx, QuatY = qy, QuatZ = qz, QuatW = qw,
+                SizeW   = widthM, SizeH = heightM,
+                Visible = s.Visible,
+            };
+        }
+    }
+
+    // Yaw (um Y) + Pitch (um X) in Grad → quaternion {qx, qy, qz, qw}.
+    // Identische Formel wie der alte Layer (engine PoseFromXYZYP).
+    private static (float qx, float qy, float qz, float qw) YawPitchToQuat(float yawDeg, float pitchDeg)
+    {
+        const float kDeg2Rad = MathF.PI / 180.0f;
+        float y2 = yawDeg   * kDeg2Rad * 0.5f;
+        float p2 = pitchDeg * kDeg2Rad * 0.5f;
+        float cy = MathF.Cos(y2), sy = MathF.Sin(y2);
+        float cx = MathF.Cos(p2), sx = MathF.Sin(p2);
+        return (
+            qx:  cy * sx,
+            qy:  sy * cx,
+            qz: -sy * sx,
+            qw:  cy * cx);
     }
 
     private void UpdateLastFavoriteFlags()

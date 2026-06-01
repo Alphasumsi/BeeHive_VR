@@ -78,6 +78,13 @@ const PAGE_READWRITE       = 0x4;
 const FILE_MAP_WRITE       = 0x2;
 const ERROR_ALREADY_EXISTS = 183;
 
+// koffi 3 returns BigInts for pointer types but the function signatures it
+// exposes are untyped (just `Function`). Centralize the cast so the calls
+// downstream read naturally.
+function ptr(v: unknown): bigint {
+  return typeof v === 'bigint' ? v : v == null ? 0n : BigInt(v as number);
+}
+
 // Names (keep in sync with the layer + the BeeHive_VR naming convention).
 const NAME_MAPPING = 'Local\\BeeHiveVR_Frame';
 const NAME_EVENT   = 'Local\\BeeHiveVR_FrameReady';
@@ -118,17 +125,17 @@ class SharedFrameChannel {
   private generation = 0n;
 
   open(): void {
-    const m = CreateFileMappingW(
-      INVALID_HANDLE_VALUE, null, PAGE_READWRITE, 0, MAPPING_SIZE, NAME_MAPPING) as bigint;
+    const m = ptr(CreateFileMappingW(
+      INVALID_HANDLE_VALUE, null, PAGE_READWRITE, 0, MAPPING_SIZE, NAME_MAPPING));
     if (!m) throw new Error(`CreateFileMappingW failed err=${GetLastError()}`);
     this.mapping = m;
 
-    const v = MapViewOfFile(m, FILE_MAP_WRITE, 0, 0, MAPPING_SIZE) as bigint;
+    const v = ptr(MapViewOfFile(m, FILE_MAP_WRITE, 0, 0, MAPPING_SIZE));
     if (!v) throw new Error(`MapViewOfFile failed err=${GetLastError()}`);
     this.mapView = v;
 
     // Manual-reset = false → auto-reset (consumer only sees one signal per pulse).
-    const e = CreateEventW(null, false, false, NAME_EVENT) as bigint;
+    const e = ptr(CreateEventW(null, false, false, NAME_EVENT));
     if (!e) throw new Error(`CreateEventW failed err=${GetLastError()}`);
     this.event = e;
 
@@ -217,7 +224,7 @@ class SharedFrameChannel {
  * for the lifetime of the process — we do not release explicitly.
  */
 export function tryAcquireSingleInstance(): boolean {
-  const mutex = CreateMutexW(null, false, NAME_MUTEX) as bigint;
+  const mutex = ptr(CreateMutexW(null, false, NAME_MUTEX));
   if (!mutex) {
     console.warn(`tryAcquireSingleInstance: CreateMutexW failed err=${GetLastError()}`);
     return true;  // don't block app startup on a mutex glitch

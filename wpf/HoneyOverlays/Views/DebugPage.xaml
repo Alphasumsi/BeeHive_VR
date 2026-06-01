@@ -157,15 +157,7 @@
                         ToolTip="Copy currently visible log entries to clipboard"/>
                 <Button Content="Clear"
                         Padding="10,5"
-                        Command="{Binding ClearCommand}"
-                        Margin="0,0,16,0"/>
-                <!-- Step 4b test trigger: push a hardcoded atlas layout to
-                     Electron over \\.\pipe\BeeHiveVR. Click cycles through
-                     three preset poses so we can verify live updates. -->
-                <Button Content="Send test atlas layout"
-                        Padding="10,5"
-                        Click="SendTestAtlasLayout_Click"
-                        ToolTip="Push a setAtlasLayout message to the Electron Atlas-Renderer"/>
+                        Command="{Binding ClearCommand}"/>
             </StackPanel>
         </DockPanel>
 

@@ -1,8 +1,6 @@
 import type { ForgeConfig } from '@electron-forge/shared-types';
 import { MakerSquirrel } from '@electron-forge/maker-squirrel';
 import { MakerZIP } from '@electron-forge/maker-zip';
-import { MakerDeb } from '@electron-forge/maker-deb';
-import { MakerRpm } from '@electron-forge/maker-rpm';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { FuseV1Options, FuseVersion } from '@electron/fuses';
@@ -10,13 +8,26 @@ import { FuseV1Options, FuseVersion } from '@electron/fuses';
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
+    name: 'BeeHive_VR_Atlas',
+    executableName: 'BeeHive_VR_Atlas',
+    appBundleId: 'com.beehivevr.atlas',
+    win32metadata: {
+      CompanyName: 'BeeHive_VR',
+      ProductName: 'BeeHive_VR Atlas',
+      FileDescription: 'BeeHive_VR Atlas-Renderer (Electron)',
+    },
   },
   rebuildConfig: {},
   makers: [
-    new MakerSquirrel({}),
-    new MakerZIP({}, ['darwin']),
-    new MakerRpm({}),
-    new MakerDeb({}),
+    new MakerSquirrel({
+      name: 'BeeHive_VR_Atlas',
+      authors: 'BeeHive_VR',
+      description: 'BeeHive_VR Atlas-Renderer — feeds iRacing dashies into VR',
+      // Setup-Filename: Squirrel default ist "<name>-<version> Setup.exe".
+      setupExe: 'BeeHive_VR_Atlas-Setup.exe',
+    }),
+    // BeeHive_VR ist Windows-only (OpenXR-Layer + WPF). Linux/macOS-Maker raus.
+    new MakerZIP({}, ['win32']),
   ],
   plugins: [
     new VitePlugin({
