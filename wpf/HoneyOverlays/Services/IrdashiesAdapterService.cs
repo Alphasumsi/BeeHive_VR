@@ -30,7 +30,10 @@ public sealed class IrdashiesAdapterService
 
     // Statischer irdashies-Build (unser Vite-Config, gepinnt). Häppchen 4c
     // macht das über SettingsStore konfigurierbar.
-    private const string WebRoot = @"D:\VBdev\irdashies\honey-dist";
+    // honey-dist lives in the local irdashies clone. Folder got the
+    // "(Template)" suffix after the rebuild — until we wire a Setting, hard
+    // path here so the iframes stop returning 404 / showing grey.
+    private const string WebRoot = @"D:\VBdev\irdashies(Template)\honey-dist";
 
     // Echte irdashies-Mock-Daten (für die Vorschau ohne iRacing). Als Embedded
     // Resource gebundelt — keine Laufzeit-Abhängigkeit zur irdashies-Source.

@@ -720,18 +720,19 @@ public partial class MainViewModel : ObservableObject
         EngineLink.Instance.PushAtlasLayout(BuildAtlasQuads(sources));
     }
 
-    // STUB id-mapping: WPF source ids are user-defined and don't yet match the
-    // atlas-rect ids hardcoded in app/src/main.ts (p1/p2/p3). Until #3
-    // (dynamische Dashie-Auswahl) lands, the first three sources get bound
-    // to those slots by index. Visible-but-overflow sources are dropped.
-    private static readonly string[] AtlasSlotIds = { "p1", "p2", "p3" };
+    // Atlas-Rect-Vergabe ist Electron-Sache (dynamischer Packer in
+    // app/src/main.ts). WPF schickt die echte Source-Id durch — damit kommt
+    // placeUpdate vom Layer mit derselben Id zurück und FindLiveSourceById
+    // greift. Sources werden hart auf die Atlas-Größe gedeckelt (Electron
+    // hat heute 3 freie Regions).
+    private const int AtlasSlotsAvailable = 3;
 
     private static IEnumerable<AtlasQuadDto> BuildAtlasQuads(IEnumerable<SourceModel> sources)
     {
         int i = 0;
         foreach (var s in sources)
         {
-            if (i >= AtlasSlotIds.Length) yield break;
+            if (i++ >= AtlasSlotsAvailable) yield break;
             var (qx, qy, qz, qw) = YawPitchToQuat(s.Yaw, s.Pitch);
 
             // Scale = quad width in meters (alter Layer-Vertrag). Height aus
@@ -744,7 +745,7 @@ public partial class MainViewModel : ObservableObject
 
             yield return new AtlasQuadDto
             {
-                Id      = AtlasSlotIds[i++],
+                Id      = s.Id,
                 PosX    = s.X, PosY = s.Y, PosZ = s.Z,
                 QuatX   = qx, QuatY = qy, QuatZ = qz, QuatW = qw,
                 SizeW   = widthM, SizeH = heightM,
@@ -1226,11 +1227,45 @@ public partial class MainViewModel : ObservableObject
         }
         finally { _suppressEnginePush = prev; }
 
+        // BeeHive_VR (2.6.2026): Layer hält die neue Pose nur für die Dauer
+        // des Grabs als lokales Overlay; Electron muss die Werte mitkriegen,
+        // sonst snappt der Quad beim Trigger-Release auf den letzten
+        // FrameSlot-Stand zurück (Bug 'a' aus Phase B). Push fühlt sich
+        // doppelt an, ist aber bewusst — der Echo-Loop wird vom Layer-Override
+        // gefangen weil m_dragPos vom Controller, nicht vom FrameSlot getrieben
+        // wird.
+        EngineLink.Instance.PushAtlasLayout(BuildAtlasQuads(GetSourcesForCurrentContext()));
+
         // Persistenz: SpotterLayout speichert sich selbst (eigener Hook). Car-
         // Layouts: am OWNER schedulen (≠ SelectedLayout möglich, dann fasst der
         // Source_PropertyChanged-Default-Path nicht).
         if (_overlayContext != OverlayContext.Spotter && ActiveLayout != null)
             _autoSave.ScheduleSave(ActiveLayout);
+    }
+
+    // Helper für OnPlaceUpdate — spiegelt die Logik in PushCurrentLayoutToEngine,
+    // gibt aber die Source-Liste statt sie zu pushen.
+    private IEnumerable<SourceModel> GetSourcesForCurrentContext()
+    {
+        switch (_overlayContext)
+        {
+            case OverlayContext.None:
+                return Array.Empty<SourceModel>();
+            case OverlayContext.Spotter:
+                return SpotterLayout.Sources.Select(vm => vm.ToModel()).ToList();
+            default:
+                var layout = ActiveLayout;
+                if (layout == null) return Array.Empty<SourceModel>();
+                var pushSession = _overlayContext switch
+                {
+                    OverlayContext.Qualify => SessionType.Qualify,
+                    OverlayContext.Race => SessionType.Race,
+                    OverlayContext.TestDrive => SessionType.TestDrive,
+                    _ => SessionType.Practice,
+                };
+                return layout.GetSessionSources(pushSession)
+                             .Select(vm => vm.ToModel()).ToList();
+        }
     }
 
     private SourceViewModel? FindLiveSourceById(string id)

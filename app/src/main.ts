@@ -21,6 +21,7 @@ import started from 'electron-squirrel-startup';
 import koffi from 'koffi';
 import { sharedFrame, tryAcquireSingleInstance, FramePublish, QuadDesc } from './ipc/shared-frame';
 import { wpfLink, AtlasQuadFromWpf } from './ipc/wpf-link';
+import { placeOut, PlaceUpdate } from './ipc/place-out';
 
 // Win32 bindings for cloaking the atlas window. Without this Edge Overlays
 // (and other "list visible top-level windows" tools) pick up our atlas and
@@ -47,7 +48,10 @@ const WS_EX_TOOLWINDOW = 0x00000080;
 function applyCloakingAndToolWindow(hwnd: bigint): void {
   // koffi 3 round-trips void* as BigInt — pass the HWND straight in.
   // Tool-window first (changes extended style); cloaking is independent.
-  const ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as bigint;
+  // GetWindowLongPtrW returns intptr_t which koffi may surface as Number
+  // (small values fit a JS double); normalise to BigInt so OR doesn't throw.
+  const exRaw = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as number | bigint;
+  const ex = typeof exRaw === 'bigint' ? exRaw : BigInt(exRaw);
   SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | BigInt(WS_EX_TOOLWINDOW));
   // BOOL TRUE = 4-byte 1.
   const cloak = Buffer.alloc(4);
@@ -79,25 +83,20 @@ const ATLAS_FORMAT_DXGI = 28; // DXGI_FORMAT_R8G8B8A8_UNORM
 const ATLAS_WIDTH  = 1024;
 const ATLAS_HEIGHT = 768;
 
-// Identity quat = {0, 0, 0, 1}. Helper to keep LAYOUT readable.
-// These are DEFAULTS — WPF can override pose/size/visibility per id via the
-// setAtlasLayout pipe message. Atlas rects stay Electron-owned (the iframe
-// packing is our concern, not WPF's).
-const DEFAULT_LAYOUT: QuadDesc[] = [
-  // p1 — top-left, 1m forward-left, 0.4m wide
-  { id: 'p1', rectX:   0, rectY:   0, rectW:  512, rectH: 384,
-    posX: -0.6, posY:  0.0, posZ: -1.0, sizeW: 0.40, sizeH: 0.30 },
-  // p2 — top-right, 1m forward-right
-  { id: 'p2', rectX: 512, rectY:   0, rectW:  512, rectH: 384,
-    posX:  0.6, posY:  0.0, posZ: -1.0, sizeW: 0.40, sizeH: 0.30 },
-  // p3 — bottom wide, slightly below eye height
-  { id: 'p3', rectX:   0, rectY: 384, rectW: 1024, rectH: 384,
-    posX:  0.0, posY: -0.35, posZ: -1.0, sizeW: 0.80, sizeH: 0.30 },
+// Atlas packing — three fixed regions matching the iframe panels in
+// index.html. Electron stays authoritative for the rect side (iframe DOM is
+// Electron-owned); WPF supplies pose / size / visibility and we assign a
+// region to each incoming id on a first-come basis. Existing assignments
+// stick (so dragging a quad in WPF doesn't re-shuffle which iframe shows).
+const ATLAS_REGIONS: { rectX: number; rectY: number; rectW: number; rectH: number }[] = [
+  { rectX:   0, rectY:   0, rectW:  512, rectH: 384 },   // p1 iframe
+  { rectX: 512, rectY:   0, rectW:  512, rectH: 384 },   // p2 iframe
+  { rectX:   0, rectY: 384, rectW: 1024, rectH: 384 },   // p3 iframe
 ];
 
-// Mutable working copy. WPF messages overwrite it; republish() pushes the
-// current state to the shared mapping.
-const currentLayout: QuadDesc[] = DEFAULT_LAYOUT.map(q => ({ ...q }));
+// WPF authoritatively owns which quads exist — nothing in VR until
+// setAtlasLayout arrives with at least one entry.
+const currentLayout: QuadDesc[] = [];
 
 let currentHwnd: bigint = 0n;
 
@@ -113,18 +112,37 @@ function republish(): void {
 }
 
 function applyWpfLayout(quads: AtlasQuadFromWpf[]): void {
+  // Phase 1: keep existing entries that WPF still wants, drop ones it doesn't.
+  // Phase 2: append new ones, assigning the next free atlas region.
+  const incomingIds = new Set(quads.map(q => q.id));
+  for (let i = currentLayout.length - 1; i >= 0; i--) {
+    if (!incomingIds.has(currentLayout[i].id)) currentLayout.splice(i, 1);
+  }
+  const usedRegions = new Set(
+    currentLayout.map(s => `${s.rectX},${s.rectY},${s.rectW},${s.rectH}`));
   for (const q of quads) {
-    const slot = currentLayout.find(s => s.id === q.id);
+    let slot = currentLayout.find(s => s.id === q.id);
     if (!slot) {
-      console.warn(`[main] WPF sent unknown atlas id "${q.id}" — ignoring`);
-      continue;
+      const region = ATLAS_REGIONS.find(
+        r => !usedRegions.has(`${r.rectX},${r.rectY},${r.rectW},${r.rectH}`));
+      if (!region) {
+        console.warn(`[main] no free atlas region for new id "${q.id}" — dropping`);
+        continue;
+      }
+      slot = {
+        id: q.id, rectX: region.rectX, rectY: region.rectY,
+        rectW: region.rectW, rectH: region.rectH,
+        posX: 0, posY: 0, posZ: -1, sizeW: 0.4, sizeH: 0.3,
+      };
+      currentLayout.push(slot);
+      usedRegions.add(`${region.rectX},${region.rectY},${region.rectW},${region.rectH}`);
     }
     slot.posX  = q.posX;  slot.posY  = q.posY;  slot.posZ  = q.posZ;
     slot.quatX = q.quatX; slot.quatY = q.quatY; slot.quatZ = q.quatZ; slot.quatW = q.quatW;
     slot.sizeW = q.sizeW; slot.sizeH = q.sizeH;
     slot.visible = q.visible;
   }
-  console.log(`[main] WPF layout applied: ${quads.length} quad(s)`);
+  console.log(`[main] WPF layout applied: ${quads.length} quad(s), live=${currentLayout.length}`);
   republish();
 }
 
@@ -196,10 +214,34 @@ app.whenReady().then(() => {
   wpfLink.on('atlasLayout', (quads: AtlasQuadFromWpf[]) => applyWpfLayout(quads));
   wpfLink.start();
 
+  // Place-in-VR: layer publishes pose updates while a controller-grab is
+  // active; we forward each generation to WPF over the existing pipe. The
+  // mapping only exists once iRacing is running and the layer is past its
+  // setup-holdoff, so the reader just polls quietly until then.
+  placeOut.on('placeUpdate', (u: PlaceUpdate) => {
+    // JSON keys match WPF's EngineLink.PlaceUpdate parser (legacy field names
+    // — x/y/z/yaw/pitch/scale/opacity). `scale` carries sizeW; sizeH is
+    // implicitly proportional via WPF's aspect handling. Opacity is not in
+    // QuadSlot yet, send 0 as placeholder so the parser doesn't choke.
+    wpfLink.send({
+      type:    'placeUpdate',
+      id:      u.id,
+      x:       u.posX,
+      y:       u.posY,
+      z:       u.posZ,
+      yaw:     u.yawDeg,
+      pitch:   u.pitchDeg,
+      scale:   u.sizeW,
+      opacity: 0,
+    });
+  });
+  placeOut.start();
+
   createCapturedWindow();
 });
 
 app.on('before-quit', () => {
+  try { placeOut.stop(); } catch { /* ignore */ }
   try { wpfLink.stop(); } catch { /* ignore */ }
   try { sharedFrame.close(); } catch { /* ignore */ }
 });
