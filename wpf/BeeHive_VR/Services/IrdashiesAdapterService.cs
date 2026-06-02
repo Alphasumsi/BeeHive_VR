@@ -28,12 +28,11 @@ public sealed class IrdashiesAdapterService
     // Bewusst nicht 3000 (irdashies-Default) / 8888 (SimHub) — kollisionsarm.
     public const int Port = 8723;
 
-    // Statischer irdashies-Build (unser Vite-Config, gepinnt). Häppchen 4c
-    // macht das über SettingsStore konfigurierbar.
-    // honey-dist lives in the local irdashies clone. Folder got the
-    // "(Template)" suffix after the rebuild — until we wire a Setting, hard
-    // path here so the iframes stop returning 404 / showing grey.
-    private const string WebRoot = @"D:\VBdev\irdashies(Template)\honey-dist";
+    // Vite-Build der Dashies. Wird aus dem WPF-Output-Folder geliefert
+    // (BeeHive_VR.csproj kopiert WebRoot\dashies-dist\ neben die Exe).
+    // ResolveWebRoot() macht den Lookup zur Laufzeit — keine Hard-Codes mehr
+    // auf D:\VBdev\irdashies.
+    private static string WebRoot => DashiesAssets.ResolveWebRoot();
 
     // Echte irdashies-Mock-Daten (für die Vorschau ohne iRacing). Als Embedded
     // Resource gebundelt — keine Laufzeit-Abhängigkeit zur irdashies-Source.

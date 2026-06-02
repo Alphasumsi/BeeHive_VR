@@ -11,7 +11,7 @@ namespace BeeHiveVR.Services;
 /// (Format wie irdashies: { currentProfile, dashboards:{ default:{widgets,generalSettings} } }).
 ///
 /// Beim ersten Mal Migration aus %APPDATA%\irdashies\config.json (falls vorhanden),
-/// sonst Fallback honey-dist\dashboard.json → Minimal.
+/// sonst Fallback aus der eingebetteten dashies-dist\dashboard.json → Minimal.
 ///
 /// Genutzt von: IrdashiesAdapterService (Lesen, BuildDashboard) und dem Dashies-Tab
 /// (Schreiben einzelner Widget-Configs).
@@ -32,8 +32,10 @@ public sealed class IrdashiesConfigStore
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "irdashies", "config.json");
 
-    private static string FallbackDashboardPath => Path.Combine(
-        @"D:\VBdev\irdashies\honey-dist", "dashboard.json");
+    // Eingebettete Baseline aus dem dashies-dist (kein D:\VBdev\irdashies-Pfad
+    // zur Laufzeit). Leerer String falls die Asset-Suche nichts findet — der
+    // Loader fällt dann auf seine Minimal-Standard-Config zurück.
+    private static string FallbackDashboardPath => DashiesAssets.ResolveFallbackDashboardPath();
 
     private IrdashiesConfigStore() { }
 
@@ -158,7 +160,7 @@ public sealed class IrdashiesConfigStore
                 ["currentProfile"] = "default",
                 ["dashboards"] = new JsonObject { ["default"] = fb },
             };
-            Logger.Info("IrdashiesConfigStore: Fallback honey-dist/dashboard.json.");
+            Logger.Info("IrdashiesConfigStore: Fallback dashies-dist/dashboard.json.");
             Save();
             return;
         }

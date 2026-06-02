@@ -1,0 +1,1 @@
+var n={debug:function(){}.bind(),info:function(){}.bind(),warn:function(){}.bind(),error:function(){}.bind()};function r(r){return(...o)=>{n[r](...o),window.logBridge?.log(r,...o)}}var o={debug:r("debug"),info:r("info"),warn:r("warn"),error:r("error")};export{o as t};
