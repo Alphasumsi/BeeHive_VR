@@ -44,9 +44,6 @@ public class SettingsModel
     [JsonPropertyName("showTradingPaints")]
     public bool ShowTradingPaints { get; set; } = true;
 
-    [JsonPropertyName("showHtmlOverlays")]
-    public bool ShowHtmlOverlays { get; set; } = false;
-
     [JsonPropertyName("showAutostart")]
     public bool ShowAutostart { get; set; } = false;
 
@@ -56,6 +53,10 @@ public class SettingsModel
     /// <summary>Dashies-Tab (In-App-Config). Experimentell → nur im Dev-Mode sichtbar.</summary>
     [JsonPropertyName("showDashies")]
     public bool ShowDashies { get; set; } = false;
+
+    /// <summary>Help-Tab in der Navi. Default an, Dev-Toggle kann ausblenden.</summary>
+    [JsonPropertyName("showHelp")]
+    public bool ShowHelp { get; set; } = true;
 
     // --- Window-State (Remember Window Position and Scale) -----------------
     /// <summary>Master-Toggle: Fenster-Geometrie + UI-Scale über Sessions merken.</summary>
@@ -97,9 +98,4 @@ public class SettingsModel
     /// <summary>Bei App-Start einmal Cleanup laufen lassen.</summary>
     [JsonPropertyName("tradingPaintsCleanupOnStartup")]
     public bool TradingPaintsCleanupOnStartup { get; set; } = false;
-
-    // --- Dev / Preview ----------------------------------------------------
-    /// <summary>Dev-Toggle: alte Layout-Bar (Legacy) statt der VR-Layouts-Sidebar benutzen.</summary>
-    [JsonPropertyName("useLegacyLayoutBar")]
-    public bool UseLegacyLayoutBar { get; set; } = false;
 }

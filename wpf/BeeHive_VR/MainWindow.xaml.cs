@@ -125,12 +125,11 @@ public partial class MainWindow : Window
         VM?.RegisterSettingsClickForDevMode();
         SetSection("Settings");
     }
-    private void NavSupport_Click(object sender, RoutedEventArgs e) => SetSection("Support");
+    private void NavHelp_Click(object sender, RoutedEventArgs e) => SetSection("Help");
 
     private void NavDashies_Click(object sender, RoutedEventArgs e) => SetSection("Dashies");
 
     // Platzhalter-Sektionen (Inhalt kommt später)
-    private void NavHtml_Click(object sender, RoutedEventArgs e) => SetSection("irDashies");
     private void NavAutostart_Click(object sender, RoutedEventArgs e) => SetSection("Autostart");
     private void NavButtonbox_Click(object sender, RoutedEventArgs e) => SetSection("Buttonbox");
 

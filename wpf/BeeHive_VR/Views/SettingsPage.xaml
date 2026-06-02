@@ -284,12 +284,12 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                        <TextBlock Text="Show Trading Paints" FontSize="13" FontWeight="SemiBold"/>
-                                        <TextBlock Text="Show the Trading Paints icon in the navigation bar"
+                                        <TextBlock Text="Show Dashies" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="In-app config tab for the irDashies overlays"
                                                    FontSize="11" Foreground="{StaticResource TextTertiary}"
                                                    Margin="0,2,0,0"/>
                                     </StackPanel>
-                                    <CheckBox Grid.Column="1" IsChecked="{Binding ShowTradingPaints}"
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding ShowDashies}"
                                               Style="{StaticResource ToggleSwitch}"
                                               VerticalAlignment="Center" Margin="12,0,0,0"/>
                                 </Grid>
@@ -302,12 +302,12 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                        <TextBlock Text="Show irDashies" FontSize="13" FontWeight="SemiBold"/>
-                                        <TextBlock Text="Show the irDashies icon in the navigation bar"
+                                        <TextBlock Text="Show Trading Paints" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Show the Trading Paints icon in the navigation bar"
                                                    FontSize="11" Foreground="{StaticResource TextTertiary}"
                                                    Margin="0,2,0,0"/>
                                     </StackPanel>
-                                    <CheckBox Grid.Column="1" IsChecked="{Binding ShowHtmlOverlays}"
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding ShowTradingPaints}"
                                               Style="{StaticResource ToggleSwitch}"
                                               VerticalAlignment="Center" Margin="12,0,0,0"/>
                                 </Grid>
@@ -591,23 +591,6 @@
                                                TextWrapping="Wrap"/>
                                 </StackPanel>
 
-                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
-
-                                <Grid Margin="0,4,0,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                        <TextBlock Text="Throw test exception" FontSize="13" FontWeight="SemiBold"/>
-                                        <TextBlock Text="Verify that exception logging is wired up correctly"
-                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
-                                                   Margin="0,2,0,0"/>
-                                    </StackPanel>
-                                    <Button Grid.Column="1" Content="Throw"
-                                            Click="DevThrow_Click"
-                                            Padding="12,6" VerticalAlignment="Center"/>
-                                </Grid>
                             </StackPanel>
                         </Border>
 
@@ -622,24 +605,6 @@
                                 <TextBlock Text="These nav icons only appear while Dev mode is on. Overlays already added to a layout keep working regardless."
                                            FontSize="11" Foreground="{StaticResource TextTertiary}"
                                            FontStyle="Italic" TextWrapping="Wrap" Margin="0,0,0,8"/>
-
-                                <Grid Margin="0,4,0,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                        <TextBlock Text="Show Dashies" FontSize="13" FontWeight="SemiBold"/>
-                                        <TextBlock Text="In-app config tab for the irDashies overlays"
-                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
-                                                   Margin="0,2,0,0"/>
-                                    </StackPanel>
-                                    <CheckBox Grid.Column="1" IsChecked="{Binding ShowDashies}"
-                                              Style="{StaticResource ToggleSwitch}"
-                                              VerticalAlignment="Center" Margin="12,0,0,0"/>
-                                </Grid>
-
-                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
 
                                 <Grid Margin="0,4,0,4">
                                     <Grid.ColumnDefinitions>
@@ -674,29 +639,21 @@
                                               Style="{StaticResource ToggleSwitch}"
                                               VerticalAlignment="Center" Margin="12,0,0,0"/>
                                 </Grid>
-                            </StackPanel>
-                        </Border>
 
-                        <!-- Preview -->
-                        <TextBlock Text="Preview" FontSize="13" FontWeight="SemiBold"
-                                   Foreground="{StaticResource TextSecondary}"
-                                   Margin="0,4,0,6"/>
-                        <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
-                                CornerRadius="6" Background="{StaticResource BgSecondary}"
-                                Padding="14,12" Margin="0,0,0,16">
-                            <StackPanel>
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
                                 <Grid Margin="0,4,0,4">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                        <TextBlock Text="Use Legacy Layout bar" FontSize="13" FontWeight="SemiBold"/>
-                                        <TextBlock Text="Off = new VR-Layouts sidebar (card style, hover-reveal, session tag). On = legacy Layout bar."
+                                        <TextBlock Text="Show Help" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Show the Help (?) icon in the navigation bar"
                                                    FontSize="11" Foreground="{StaticResource TextTertiary}"
-                                                   Margin="0,2,0,0" TextWrapping="Wrap"/>
+                                                   Margin="0,2,0,0"/>
                                     </StackPanel>
-                                    <CheckBox Grid.Column="1" IsChecked="{Binding UseLegacyLayoutBar}"
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding ShowHelp}"
                                               Style="{StaticResource ToggleSwitch}"
                                               VerticalAlignment="Center" Margin="12,0,0,0"/>
                                 </Grid>
@@ -765,20 +722,6 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- Logging -->
-                        <TextBlock Text="Logging" FontSize="13" FontWeight="SemiBold"
-                                   Foreground="{StaticResource TextSecondary}"
-                                   Margin="0,4,0,6"/>
-                        <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
-                                CornerRadius="6" Background="{StaticResource BgSecondary}"
-                                Padding="14,12" Margin="0,0,0,16">
-                            <StackPanel>
-                                <TextBlock Text="Log level configuration will be available here in a later phase."
-                                           FontSize="12"
-                                           Foreground="{StaticResource TextTertiary}"
-                                           TextWrapping="Wrap"/>
-                            </StackPanel>
-                        </Border>
                     </StackPanel>
 
                     <!-- Spacer: damit die letzte Section auch oben anschlagen kann -->

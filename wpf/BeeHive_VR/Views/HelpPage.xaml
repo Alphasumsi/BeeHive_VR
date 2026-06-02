@@ -1,4 +1,4 @@
-<UserControl x:Class="BeeHiveVR.Views.SupportPage"
+<UserControl x:Class="BeeHiveVR.Views.HelpPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -7,7 +7,7 @@
              Background="{StaticResource BgPrimary}">
 
     <Grid>
-        <TextBlock Text="Support"
+        <TextBlock Text="Help"
                    FontSize="32" FontWeight="Light"
                    HorizontalAlignment="Center" VerticalAlignment="Center"
                    Foreground="{StaticResource TextSecondary}"/>

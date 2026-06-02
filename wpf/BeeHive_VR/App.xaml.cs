@@ -68,35 +68,16 @@ namespace BeeHiveVR
                 Logger.Warn($"Single-instance activate listener failed: {ex.Message}");
             }
 
-            // Settings laden — VOR den Services damit Pfade & Toggles greifen
-            // (z.B. BrowserHostManager.ResolveBrowserHostPath nutzt SettingsStore.Current).
+            // Settings laden — VOR den Services damit Pfade & Toggles greifen.
             SettingsStore.Load();
 
             base.OnStartup(e);
 
-            // BeeHive_VR (1.6.2026): browser-host.exe ist tot — Atlas wird vom
-            // Electron-Prozess gerendert, keine browser-host-Prozesse mehr zu killen.
-            // Cleanup-Block übersprungen.
-
-            // iRacing-Service starten (Häppchen 1: Skelett, noch keine Connection)
+            // iRacing-Service starten
             IRacingService.Instance.Start();
 
-            // PERF-WORK DEAKTIVIERT (Chat 30.5.2026)
-            // // iRacing-Gating verdrahten BEVOR EngineLink startet — sonst könnte
-            // // ConnectionChanged feuern bevor der Subscriber dran ist.
-            // BrowserHostManager.Instance.Init();
-
-            // Named-Pipe-Server für die Engine-Verbindung (Schritt 13b)
+            // Named-Pipe-Server für die Engine-Verbindung
             EngineLink.Instance.Start();
-
-            // PERF-WORK DEAKTIVIERT (Chat 30.5.2026)
-            // // Host-Stats-Poller (CPU%/Mem für browser-host + WebView2-Kinder).
-            // // Läuft im WPF-Prozess — Toolhelp32 hier sicher (im Layer crasht es iRacing).
-            // HostStatsPoller.Instance.Start();
-
-            // BeeHive_VR: BrowserHostSizeReporter überwacht %TEMP%\vroverlay-host-*.size,
-            // die niemand mehr schreibt. Start auskommentiert; Service-Body ist No-op.
-            // BrowserHostSizeReporter.Instance.Start();
 
             // Globaler Keybind-Input-Hook (Keyboard + HID, hintergrundfähig)
             RawInputService.Instance.Start();
@@ -285,14 +266,8 @@ namespace BeeHiveVR
         {
             TrayIconService.Instance.Dispose();
             TradingPaintsService.Instance.Stop();
-            // BeeHive_VR: alte browser-host-Pipeline-Services sind stillgelegt — IrdashiesPreviewService
-            // spawnt browser-host, BrowserHostSizeReporter watcht eine tote Pipe,
-            // BrowserHostManager verwaltet nicht-mehr-existente Hosts.
-            // IrdashiesPreviewService.Instance.Close();
             IrdashiesAdapterService.Instance.Stop();
             RawInputService.Instance.Stop();
-            // BrowserHostSizeReporter.Instance.Stop();
-            // BrowserHostManager.Instance.StopAll();
             EngineLink.Instance.Stop();
             IRacingService.Instance.Stop();
             try { _instanceMutex?.ReleaseMutex(); } catch { }

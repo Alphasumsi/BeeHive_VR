@@ -110,20 +110,6 @@ public partial class SettingsPage : UserControl
 
     // ---- Developer-Section --------------------------------------------------
 
-    private void DevThrow_Click(object sender, RoutedEventArgs e)
-    {
-        try
-        {
-            throw new System.InvalidOperationException("Test exception triggered from Developer settings");
-        }
-        catch (System.Exception ex)
-        {
-            BeeHiveVR.Services.Logger.Error("DevThrow_Click test", ex);
-            MessageBox.Show("Exception thrown and logged. Check Debug page or log file.",
-                "Test exception", MessageBoxButton.OK, MessageBoxImage.Information);
-        }
-    }
-
     private void DevReloadConfigs_Click(object sender, RoutedEventArgs e)
     {
         if (Application.Current.MainWindow?.DataContext is MainViewModel mvm)

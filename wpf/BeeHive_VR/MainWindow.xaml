@@ -385,24 +385,10 @@
                                       Width="25" Height="25"/>
                         </RadioButton>
 
-                        <!-- irDashies -->
-                        <RadioButton Style="{StaticResource IconNavButton}"
-                                          GroupName="MainNav"
-                                          IsChecked="{Binding ActiveSection,
-                                              Converter={StaticResource EnumToBool},
-                                              ConverterParameter=irDashies, Mode=OneWay}"
-                                          Visibility="{Binding ShowHtmlOverlays,
-                                              Converter={StaticResource BoolToVis}}"
-                                          ToolTip="irDashies"
-                                          Click="NavHtml_Click">
-                            <Path Data="M5 14 C5 8 9 4 13 4 C17 4 20 7 20 12 L20 15 C20 16 19 17 18 17 L8 17 L6 19 Z M6.5 11 L18 11"
-                                      Stretch="Uniform" Stroke="{Binding Foreground,
-                                          RelativeSource={RelativeSource AncestorType=ToggleButton}}"
-                                      StrokeThickness="2" Fill="Transparent"
-                                      Width="25" Height="25"/>
-                        </RadioButton>
-
-                        <!-- Dashies — In-App-Config der irDashies-Overlays (STUB) -->
+                        <!-- Dashies — In-App-Config der irDashies-Overlays (STUB).
+                             Standard-Foreground statt Dev-Akzent: experimentelle
+                             Feature-Tabs sind keine Dev-Tools, das Blau bleibt
+                             Debug + DevMode-Settings-Zahnrad vorbehalten. -->
                         <RadioButton Style="{StaticResource IconNavButton}"
                                           GroupName="MainNav"
                                           IsChecked="{Binding ActiveSection,
@@ -414,7 +400,8 @@
                                           Click="NavDashies_Click">
                             <!-- Schieberegler-Icon (Config) -->
                             <Path Data="M4 7 H14 M18 7 H20 M4 12 H8 M12 12 H20 M4 17 H16 M20 17 H20 M14 5 a2 2 0 1 1 0 4 a2 2 0 1 1 0 -4 M8 10 a2 2 0 1 1 0 4 a2 2 0 1 1 0 -4 M16 15 a2 2 0 1 1 0 4 a2 2 0 1 1 0 -4"
-                                      Stretch="Uniform" Stroke="{StaticResource DevModeAccent}"
+                                      Stretch="Uniform" Stroke="{Binding Foreground,
+                                          RelativeSource={RelativeSource AncestorType=ToggleButton}}"
                                       StrokeThickness="2" Fill="Transparent"
                                       Width="25" Height="25"/>
                         </RadioButton>
@@ -498,14 +485,16 @@
                                       StrokeThickness="2" Width="25" Height="25"/>
                         </RadioButton>
 
-                        <!-- Support -->
+                        <!-- Help -->
                         <RadioButton Style="{StaticResource IconNavButton}"
                                           GroupName="MainNav"
                                           IsChecked="{Binding ActiveSection,
                                               Converter={StaticResource EnumToBool},
-                                              ConverterParameter=Support, Mode=OneWay}"
-                                          ToolTip="Support"
-                                          Click="NavSupport_Click">
+                                              ConverterParameter=Help, Mode=OneWay}"
+                                          ToolTip="Help"
+                                          Click="NavHelp_Click"
+                                          Visibility="{Binding ShowHelp,
+                                              Converter={StaticResource BoolToVis}}">
                                     <Grid Width="25" Height="25">
                                         <Ellipse Stroke="{Binding Foreground,
                                           RelativeSource={RelativeSource AncestorType=ToggleButton}}"
@@ -520,19 +509,12 @@
                         </DockPanel>
                     </Border>
 
-            <!-- LAYOUT-SIDEBAR — nur sichtbar wenn Layout-Section aktiv.
-                 Zwei Varianten gestapelt: VR (Default) vs. Legacy (Dev-Toggle UseLegacyLayoutBar). -->
+            <!-- LAYOUT-SIDEBAR — nur sichtbar wenn Layout-Section aktiv. -->
             <Grid Grid.Column="1"
                   Visibility="{Binding ActiveSection,
                       Converter={StaticResource StringEqualsToVis},
                       ConverterParameter=Layout}">
-                <views:LayoutSidebar
-                    Visibility="{Binding UseLegacyLayoutBar,
-                        Converter={StaticResource BoolToVis}}"/>
-                <views:VRLayoutSidebar
-                    Visibility="{Binding UseLegacyLayoutBar,
-                        Converter={StaticResource BoolToVis},
-                        ConverterParameter=Invert}"/>
+                <views:VRLayoutSidebar/>
             </Grid>
 
             <!-- HAUPTBEREICH — Page-Switcher abhängig von ActiveSection -->
@@ -552,18 +534,15 @@
                 <views:SettingsPage Visibility="{Binding ActiveSection,
                                                 Converter={StaticResource StringEqualsToVis},
                                                 ConverterParameter=Settings}"/>
-                <views:SupportPage  Visibility="{Binding ActiveSection,
+                <views:HelpPage     Visibility="{Binding ActiveSection,
                                                 Converter={StaticResource StringEqualsToVis},
-                                                ConverterParameter=Support}"/>
+                                                ConverterParameter=Help}"/>
 
                 <views:DashiesPage  Visibility="{Binding ActiveSection,
                                                 Converter={StaticResource StringEqualsToVis},
                                                 ConverterParameter=Dashies}"/>
 
                 <!-- Platzhalter-Sektionen (Nav-Icons existieren, Inhalt kommt später) -->
-                <views:HtmlOverlaysPage Visibility="{Binding ActiveSection,
-                                                Converter={StaticResource StringEqualsToVis},
-                                                ConverterParameter=irDashies}"/>
                 <views:AutostartPage    Visibility="{Binding ActiveSection,
                                                 Converter={StaticResource StringEqualsToVis},
                                                 ConverterParameter=Autostart}"/>

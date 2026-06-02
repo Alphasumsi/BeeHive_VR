@@ -100,7 +100,6 @@ public partial class MainViewModel : ObservableObject
     // Icon-Nav-Sichtbarkeit — Nav-Buttons binden hier, gesetzt aus den
     // Appearance-Toggles (SettingsViewModel.SyncNav) bzw. initial aus dem Store.
     [ObservableProperty] private bool _showTradingPaints = true;
-    [ObservableProperty] private bool _showHtmlOverlays;
     [ObservableProperty] private bool _showAutostart;
     [ObservableProperty] private bool _showButtonbox;
     // Dashies/Autostart/Buttonbox sind experimentell: ihr Sichtbarkeits-Toggle
@@ -110,16 +109,14 @@ public partial class MainViewModel : ObservableObject
     // Overlays laufen ohnehin unabhängig vom Tab weiter.
     [ObservableProperty] private bool _showDashies;
 
-    /// <summary>Debug-Nav-Button-Sichtbarkeit. In der Lite-Edition ausgeblendet
-    /// (siehe Ctor), sonst immer sichtbar.</summary>
+    /// <summary>Help-Nav-Button. Default an; Dev-Toggle kann ausblenden.</summary>
+    [ObservableProperty] private bool _showHelp = true;
+
+    /// <summary>Debug-Nav-Button-Sichtbarkeit. Default an.</summary>
     [ObservableProperty] private bool _showDebug = true;
 
-    /// <summary>Produktname der aktuellen Edition (Voll vs. Lite) — für
-    /// Fenstertitel + Titelleiste.</summary>
+    /// <summary>Produktname — für Fenstertitel + Titelleiste.</summary>
     public string ProductName => AppEdition.ProductName;
-
-    /// <summary>Dev-Toggle (Live-Spiegel von SettingsStore): neue Layouts-Sidebar.</summary>
-    [ObservableProperty] private bool _useLegacyLayoutBar;
 
     /// <summary>Live-Spiegel: wenn true, ist Default in der Sidebar verborgen
     /// (interner Fallback bleibt aber funktional).</summary>
@@ -209,11 +206,10 @@ public partial class MainViewModel : ObservableObject
         // App.OnStartup vor dem MainWindow geladen).
         var cfg = SettingsStore.Current;
         ShowTradingPaints = cfg.ShowTradingPaints;
-        ShowHtmlOverlays = cfg.ShowHtmlOverlays;
         ShowAutostart = cfg.ShowAutostart;
         ShowButtonbox = cfg.ShowButtonbox;
         ShowDashies = cfg.ShowDashies;
-        UseLegacyLayoutBar = cfg.UseLegacyLayoutBar;
+        ShowHelp = cfg.ShowHelp;
         AutoCreateLayoutOnNewCar = cfg.AutoCreateLayoutOnNewCar;
 
         // Initialer Stand + Live-Updates vom IRacingService
@@ -268,12 +264,6 @@ public partial class MainViewModel : ObservableObject
         // aus = Auto-Save flushen + Engine resyncen (Suppress wieder weg).
         engine.PlaceModeChanged += (_, on) =>
             Application.Current?.Dispatcher.BeginInvoke(() => OnPlaceModeChanged(on));
-
-        // Auto-Detect der Browser-Content-Größe via Reporter-Datei
-        BrowserHostSizeReporter.Instance.SizeReported += (_, info) =>
-        {
-            Application.Current?.Dispatcher.BeginInvoke(() => ApplyReportedSize(info.SourceId, info.Width, info.Height));
-        };
 
         // Spotter-Set-Änderung → nur neu pushen wenn Spotter gerade live ist.
         SpotterLayout.OverlaysChanged += (_, _) =>
@@ -685,13 +675,9 @@ public partial class MainViewModel : ObservableObject
     /// <summary>Reconciled browser-host-Children + pusht die Liste an die Engine.</summary>
     private static void PushSources(List<SourceModel> sources)
     {
-        // Browser-Host-Prozesse synchronisieren (nur Browser-Sources).
-        var browserSources = sources.Where(s => s.Type == SourceType.Browser).ToList();
-        BrowserHostManager.Instance.Apply(browserSources);
-
-        // Für die Engine: bei Browser-Sources den Match-Key auf source.Id umbiegen
-        // (der browser-host wird mit --title=<id> gestartet, der Layer matcht über
-        // Window-Title-Substring). Bei Window-Sources bleibt target wie eingegeben.
+        // Browser-Hosts werden nicht mehr gespawnt — Atlas-Iframes in Electron
+        // übernehmen den Job. Push-Logik bleibt identisch (Atlas-Quads im
+        // Atlas-Layout-Push, hier nur der Legacy-PushLayout an die Engine).
         var enginePayload = sources.Select(s => s.Type == SourceType.Browser
             ? new SourceModel
             {
@@ -1321,46 +1307,6 @@ public partial class MainViewModel : ObservableObject
             }
         }
         // Andere Properties (z.B. Id) ignorieren wir
-    }
-
-    /// <summary>
-    /// Wird vom BrowserHostSizeReporter ausgelöst, wenn browser-host die CSS-Content-Größe
-    /// einer Source gemessen hat. Setzt PixelWidth/Height am passenden Source nur dann, wenn
-    /// der User noch nichts eingegeben hat (beide 0). User-eingegebene Werte werden respektiert.
-    /// </summary>
-    private void ApplyReportedSize(string sourceId, int w, int h)
-    {
-        // Alle Sessions aller Layouts durchsuchen — Source kann in einer nicht-aktiven Session
-        // sein, browser-host wurde aber für sie gespawnt sobald sie zur aktiven Session gehört.
-        foreach (var layout in Layouts)
-        {
-            foreach (var session in System.Enum.GetValues<SessionType>())
-            {
-                foreach (var src in layout.GetSessionSources(session))
-                {
-                    if (src.Id != sourceId) continue;
-                    if (src.PixelWidth > 0 || src.PixelHeight > 0)
-                    {
-                        return; // user hat schon Werte
-                    }
-                    _suppressEnginePush = true;
-                    try
-                    {
-                        src.PixelWidth = w;
-                        src.PixelHeight = h;
-                    }
-                    finally
-                    {
-                        _suppressEnginePush = false;
-                    }
-                    _autoSave.SaveImmediate(layout);
-                    if (layout == ActiveLayout) PushCurrentLayoutToEngine();
-                    Logger.Info($"AutoSize from browser-host: \"{src.Name}\" (layout=\"{layout.CarName}\" {session}) → {w}x{h}");
-                    return;
-                }
-            }
-        }
-        Logger.Warn($"AutoSize: no source found with id={sourceId} for size {w}x{h}");
     }
 
     /// <summary>

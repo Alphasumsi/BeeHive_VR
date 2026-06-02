@@ -64,16 +64,13 @@ public partial class SettingsViewModel : ObservableObject
 
     // --- Icon-Nav Sichtbarkeit (Appearance) ------------------------------
     [ObservableProperty] private bool _showTradingPaints = true;
-    [ObservableProperty] private bool _showHtmlOverlays;
     [ObservableProperty] private bool _showAutostart;
     [ObservableProperty] private bool _showButtonbox;
     [ObservableProperty] private bool _showDashies;
+    [ObservableProperty] private bool _showHelp = true;
 
     // --- UI --------------------------------------------------------------
     [ObservableProperty] private double _uiScale = 1.0;
-
-    // --- Dev / Preview ---------------------------------------------------
-    [ObservableProperty] private bool _useLegacyLayoutBar;
 
     private const double UiScaleMin = 0.75;
     private const double UiScaleMax = 1.50;
@@ -118,11 +115,10 @@ public partial class SettingsViewModel : ObservableObject
         StartPage = s.StartPage;
         BrowserHostExecutable = s.BrowserHostExecutable;
         ShowTradingPaints = s.ShowTradingPaints;
-        ShowHtmlOverlays = s.ShowHtmlOverlays;
         ShowAutostart = s.ShowAutostart;
         ShowButtonbox = s.ShowButtonbox;
         ShowDashies = s.ShowDashies;
-        UseLegacyLayoutBar = s.UseLegacyLayoutBar;
+        ShowHelp = s.ShowHelp;
 
         // UI-Scale nur übernehmen wenn "Remember"-Toggle an ist — sonst Default 1.0.
         // (Beim App-Start wird RootScale direkt in App.OnStartup gesetzt; hier nur
@@ -146,11 +142,10 @@ public partial class SettingsViewModel : ObservableObject
         StartPage = "Layout";
         BrowserHostExecutable = "";
         ShowTradingPaints = true;
-        ShowHtmlOverlays = false;
         ShowAutostart = false;
         ShowButtonbox = false;
         ShowDashies = false;
-        UseLegacyLayoutBar = false;
+        ShowHelp = true;
         // Auto-Save-Hooks feuern für jeden Setter — abschließend nochmal explizit speichern.
         PersistAll();
     }
@@ -167,11 +162,10 @@ public partial class SettingsViewModel : ObservableObject
         s.StartPage = StartPage;
         s.BrowserHostExecutable = BrowserHostExecutable;
         s.ShowTradingPaints = ShowTradingPaints;
-        s.ShowHtmlOverlays = ShowHtmlOverlays;
         s.ShowAutostart = ShowAutostart;
         s.ShowButtonbox = ShowButtonbox;
         s.ShowDashies = ShowDashies;
-        s.UseLegacyLayoutBar = UseLegacyLayoutBar;
+        s.ShowHelp = ShowHelp;
         SettingsStore.Save();
     }
 
@@ -191,25 +185,13 @@ public partial class SettingsViewModel : ObservableObject
     partial void OnStartPageChanged(string value) => AutoSave();
     partial void OnBrowserHostExecutableChanged(string value) => AutoSave();
 
-    // Dev-Toggle: live an die MainViewModel spiegeln (gleiches Muster wie SyncNav).
-    partial void OnUseLegacyLayoutBarChanged(bool value)
-    {
-        if (_suppressAutoSave) return;
-        if (System.Windows.Application.Current?.MainWindow is MainWindow mw
-            && mw.DataContext is MainViewModel mvm)
-        {
-            mvm.UseLegacyLayoutBar = value;
-        }
-        AutoSave();
-    }
-
     // Icon-Nav-Sichtbarkeit: persistieren + live an die MainViewModel spiegeln
     // (die Nav-Buttons binden dort, gleiche Mechanik wie UiScale → MainWindow).
     partial void OnShowTradingPaintsChanged(bool value) { SyncNav(); AutoSave(); }
-    partial void OnShowHtmlOverlaysChanged(bool value) { SyncNav(); AutoSave(); }
     partial void OnShowAutostartChanged(bool value) { SyncNav(); AutoSave(); }
     partial void OnShowButtonboxChanged(bool value) { SyncNav(); AutoSave(); }
     partial void OnShowDashiesChanged(bool value) { SyncNav(); AutoSave(); }
+    partial void OnShowHelpChanged(bool value) { SyncNav(); AutoSave(); }
 
     private void SyncNav()
     {
@@ -218,10 +200,10 @@ public partial class SettingsViewModel : ObservableObject
             && mw.DataContext is MainViewModel mvm)
         {
             mvm.ShowTradingPaints = ShowTradingPaints;
-            mvm.ShowHtmlOverlays = ShowHtmlOverlays;
             mvm.ShowAutostart = ShowAutostart;
             mvm.ShowButtonbox = ShowButtonbox;
             mvm.ShowDashies = ShowDashies;
+            mvm.ShowHelp = ShowHelp;
         }
     }
 
