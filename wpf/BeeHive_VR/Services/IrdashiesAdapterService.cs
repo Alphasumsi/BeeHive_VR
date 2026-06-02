@@ -361,8 +361,11 @@ public sealed class IrdashiesAdapterService
 
         // --- Static-Mode (VR-Placement): keine Animation, feste Demo-Werte für
         //     Pedale/Gang/Lenkung/Speed → User platziert das Overlay in VR-Ruhe.
-        //     Static gewinnt gegen Animated bei gleichzeitiger Aktivierung.
-        if (_staticRequested)
+        //     Animated gewinnt: sobald die Dashies-Page-Preview Mock anfordert
+        //     (_animatedRequested), kippen wir auf den unten folgenden Animated-Pfad —
+        //     sonst klickt der User „Mock" und sieht trotzdem nur die statischen
+        //     Werte (der Mock-Loop läuft schon wegen Static-Auto-Start beim App-Boot).
+        if (_staticRequested && !_animatedRequested)
         {
             result["Throttle"]            = V(new[] { 0.4f });
             result["ThrottleRaw"]         = V(new[] { 0.4f });

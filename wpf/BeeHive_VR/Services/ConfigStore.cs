@@ -104,9 +104,11 @@ public static class ConfigStore
                             $"Loading anyway.");
             }
 
-            // URL-Rename-Migration: alte „index-honey-widget.html"-Targets auf
-            // „honeyvr.html" umbiegen (29.5.2026). Beim nächsten Save landet's
-            // korrekt im File.
+            // URL-Rename-Migration: alte Targets aus dem Honey-Tree auf
+            // „dashie.html" umbiegen. Zweistufige Historie:
+            //   29.5.2026: index-honey-widget.html → honeyvr.html
+            //    2.6.2026: honeyvr.html             → dashie.html
+            // Beim nächsten Save landet's persistent korrekt im File.
             MigrateLegacyWidgetUrls(wrapper.Layout);
 
             return wrapper.Layout;
@@ -124,9 +126,10 @@ public static class ConfigStore
     }
 
     /// <summary>
-    /// Migriert Source-Targets von der alten URL-Form (<c>index-honey-widget.html</c>)
-    /// auf die gekürzte (<c>honeyvr.html</c>). Wird beim Load aufgerufen; der nächste
-    /// Save schreibt's persistent zurück.
+    /// Migriert Source-Targets vom Honey-Tree (alte URL-Formen
+    /// <c>index-honey-widget.html</c> und <c>honeyvr.html</c>) auf den aktuellen
+    /// <c>dashie.html</c>-Endpoint. Wird beim Load aufgerufen; der nächste Save
+    /// schreibt's persistent zurück.
     /// </summary>
     private static void MigrateLegacyWidgetUrls(CarLayoutModel layout)
     {
@@ -137,11 +140,20 @@ public static class ConfigStore
             foreach (var src in session.Sources)
             {
                 if (src?.Target == null) continue;
+                // Reihenfolge wichtig: zuerst die längste/spezifischere Form ersetzen,
+                // sonst macht der zweite Replace aus "index-dashie-widget.html" Murks.
                 if (src.Target.IndexOf("index-honey-widget.html",
                         System.StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     src.Target = src.Target.Replace("index-honey-widget.html",
-                        "honeyvr.html",
+                        "dashie.html",
+                        System.StringComparison.OrdinalIgnoreCase);
+                }
+                if (src.Target.IndexOf("honeyvr.html",
+                        System.StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    src.Target = src.Target.Replace("honeyvr.html",
+                        "dashie.html",
                         System.StringComparison.OrdinalIgnoreCase);
                 }
             }

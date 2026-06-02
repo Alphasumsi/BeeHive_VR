@@ -34,8 +34,11 @@ public static class SpotterStore
             if (!File.Exists(FilePath)) return new();
             var json = File.ReadAllText(FilePath);
             var list = JsonSerializer.Deserialize<List<SourceModel>>(json, JsonOptions) ?? new();
-            // URL-Rename-Migration (29.5.2026): alte „index-honey-widget.html"-Targets
-            // auf „honeyvr.html" umbiegen. Beim nächsten Save landet's persistent drin.
+            // URL-Rename-Migration: alte Targets aus dem Honey-Tree auf
+            // „dashie.html" umbiegen. Historie:
+            //   29.5.2026: index-honey-widget.html → honeyvr.html
+            //    2.6.2026: honeyvr.html             → dashie.html
+            // Beim nächsten Save landet's persistent drin.
             foreach (var src in list)
             {
                 if (src?.Target == null) continue;
@@ -43,7 +46,13 @@ public static class SpotterStore
                         StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     src.Target = src.Target.Replace("index-honey-widget.html",
-                        "honeyvr.html", StringComparison.OrdinalIgnoreCase);
+                        "dashie.html", StringComparison.OrdinalIgnoreCase);
+                }
+                if (src.Target.IndexOf("honeyvr.html",
+                        StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    src.Target = src.Target.Replace("honeyvr.html",
+                        "dashie.html", StringComparison.OrdinalIgnoreCase);
                 }
             }
             return list;

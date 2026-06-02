@@ -31,6 +31,10 @@ public partial class SourceViewModel : ObservableObject
     [ObservableProperty] private int _pixelWidth = 0;
     [ObservableProperty] private int _pixelHeight = 0;
 
+    /// <summary>Optionale Variant-Id (Vorbereitung Multi-Variant-Support).
+    /// Heute nicht gelesen; null/leer = Default-Config.</summary>
+    [ObservableProperty] private string? _variantId;
+
     // UI-Zustand (nicht in JSON gespeichert)
     [ObservableProperty] private bool _isExpanded = false;
     [ObservableProperty] private bool _isRenaming = false;
@@ -117,6 +121,7 @@ public partial class SourceViewModel : ObservableObject
         Opacity = m.Opacity,
         PixelWidth = m.PixelWidth,
         PixelHeight = m.PixelHeight,
+        VariantId = m.VariantId,
     };
 
     /// <summary>Schreibt das VM zurück in ein Model (für späteren Save).</summary>
@@ -136,5 +141,6 @@ public partial class SourceViewModel : ObservableObject
         Opacity = Opacity,
         PixelWidth = PixelWidth,
         PixelHeight = PixelHeight,
+        VariantId = VariantId,
     };
 }

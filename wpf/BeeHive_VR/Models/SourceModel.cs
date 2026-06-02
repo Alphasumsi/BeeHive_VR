@@ -53,6 +53,17 @@ public class SourceModel
     [JsonPropertyName("pixelWidth")] public int PixelWidth { get; set; } = 0;
     [JsonPropertyName("pixelHeight")] public int PixelHeight { get; set; } = 0;
 
+    /// <summary>
+    /// Optionale Variant-Id für die Dashies-Widget-Konfiguration. Vorbereitung
+    /// für den späteren Multi-Variant-Support (mehrere benannte Configs pro
+    /// Widget, Layout pinnt die Variant fest). Heute nicht gelesen; null/leer
+    /// = Default-Config. <c>WhenWritingNull</c> hält die JSON-Ausgabe für
+    /// bestehende Layouts byte-stabil.
+    /// </summary>
+    [JsonPropertyName("variantId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? VariantId { get; set; }
+
     /// <summary>Round-Trip-Speicher für unbekannte Felder.</summary>
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? ExtensionData { get; set; }

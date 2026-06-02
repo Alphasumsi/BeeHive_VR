@@ -212,7 +212,7 @@ public partial class DashiesPage : UserControl
     {
         if (IsVisible) return;
         _previewOpen = false;
-        IrdashiesPreviewService.Instance.Close();
+        DashiesPreviewService.Instance.Close();
         IrdashiesAdapterService.Instance.SetMock(false);
         PreviewButton.Content = "Preview";
     }
@@ -765,7 +765,7 @@ public partial class DashiesPage : UserControl
     private void UsePreviewSize_Click(object sender, RoutedEventArgs e)
     {
         if (_activeSizeW == null || _activeSizeH == null) return;
-        if (IrdashiesPreviewService.Instance.GetContentSize() is { } sz)
+        if (DashiesPreviewService.Instance.GetContentSize() is { } sz)
         {
             _activeSizeW.Text = sz.Width.ToString();
             _activeSizeH.Text = sz.Height.ToString();
@@ -802,7 +802,7 @@ public partial class DashiesPage : UserControl
         PatchActive(cfg => SetByPath(cfg, "honeySize",
             new JsonObject { ["width"] = w, ["height"] = h }));
         if (_previewOpen && _previewWidgetId != null)
-            IrdashiesPreviewService.Instance.Show(_previewWidgetId, w, h);
+            DashiesPreviewService.Instance.Show(_previewWidgetId, w, h);
     }
 
     // ---- Aktionen -------------------------------------------------------------
@@ -835,7 +835,7 @@ public partial class DashiesPage : UserControl
             Id = NewId(),
             Name = $"{name} Dashie",
             Type = SourceType.Browser,
-            Target = IrdashiesPreviewService.BuildUrl(id),
+            Target = DashiesPreviewService.BuildUrl(id),
             Visible = true,
             X = 0.0f, Y = 0.0f, Z = -0.8f,
             Yaw = 0.0f, Pitch = 0.0f,
@@ -843,7 +843,7 @@ public partial class DashiesPage : UserControl
         };
 
         // Bei offener Vorschau: aktuelle Fenstergröße in die Format-Felder übernehmen.
-        var fromPreview = IrdashiesPreviewService.Instance.GetContentSize();
+        var fromPreview = DashiesPreviewService.Instance.GetContentSize();
         bool synced = false;
         if (fromPreview is { } s && _activeSizeW != null && _activeSizeH != null)
         {
@@ -869,7 +869,7 @@ public partial class DashiesPage : UserControl
         if (_previewOpen)
         {
             _previewOpen = false;
-            IrdashiesPreviewService.Instance.Close();
+            DashiesPreviewService.Instance.Close();
             IrdashiesAdapterService.Instance.SetMock(false);
             PreviewButton.Content = "Preview";
             StatusText.Text = "Preview closed.";
@@ -889,7 +889,7 @@ public partial class DashiesPage : UserControl
         IrdashiesAdapterService.Instance.SetMock(MockToggle.IsChecked == true, id);
 
         var (w, h) = ReadFormat();
-        bool ok = IrdashiesPreviewService.Instance.Show(id, w, h);
+        bool ok = DashiesPreviewService.Instance.Show(id, w, h);
         if (ok)
         {
             _previewOpen = true;
@@ -917,7 +917,7 @@ public partial class DashiesPage : UserControl
         // wenn der User sie woanders öffnet (OBS-Browser-Source o.ä.).
         IrdashiesAdapterService.Instance.Start(); // idempotent
 
-        var url = IrdashiesPreviewService.BuildUrl(id);
+        var url = DashiesPreviewService.BuildUrl(id);
         try
         {
             Clipboard.SetText(url);

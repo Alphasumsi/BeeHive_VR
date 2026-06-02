@@ -266,6 +266,9 @@ namespace BeeHiveVR
         {
             TrayIconService.Instance.Dispose();
             TradingPaintsService.Instance.Stop();
+            // Preview vor dem Adapter beenden — die Vorschau lädt aus dem Adapter,
+            // umgekehrte Reihenfolge würde Renderer-Errors loggen.
+            DashiesPreviewService.Instance.Close();
             IrdashiesAdapterService.Instance.Stop();
             RawInputService.Instance.Stop();
             EngineLink.Instance.Stop();
