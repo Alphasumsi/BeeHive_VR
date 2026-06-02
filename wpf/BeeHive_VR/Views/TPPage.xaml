@@ -1,0 +1,233 @@
+<UserControl x:Class="BeeHiveVR.Views.TPPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d"
+             Background="{StaticResource BgPrimary}">
+
+    <!--
+        DataContext = TradingPaintsViewModel (im Code-Behind am inneren Root
+        gesetzt, damit das Visibility-Binding vom MainWindow weiter auf dem
+        geerbten MainViewModel läuft — sonst bleibt die Page immer sichtbar).
+    -->
+    <Grid Margin="20,16,20,16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <Border Grid.Row="0" BorderBrush="{StaticResource BorderTertiary}"
+                BorderThickness="0,0,0,1" Margin="0,0,0,14">
+            <DockPanel LastChildFill="False">
+                <Image DockPanel.Dock="Right"
+                       Source="/Assets/TP_StackSide_CMYK_DarkBG.png"
+                       Height="36" Margin="0,0,8,4"
+                       VerticalAlignment="Center"
+                       RenderOptions.BitmapScalingMode="HighQuality"
+                       ToolTip="Trading Paints (tradingpaints.com)"/>
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                    <Border Padding="14,8" BorderBrush="{StaticResource AccentText}"
+                            BorderThickness="0,0,0,2">
+                        <TextBlock Text="Trading Paints" FontSize="15" FontWeight="SemiBold"/>
+                    </Border>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+
+                <!-- ===== Downloader ===== -->
+                <TextBlock Text="Downloader" FontSize="20" FontWeight="Light"
+                           Foreground="{StaticResource TextSecondary}" Margin="0,0,0,12"/>
+                <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                        CornerRadius="6" Background="{StaticResource BgSecondary}"
+                        Padding="14,12" Margin="0,0,0,20">
+                    <StackPanel>
+
+                        <!-- Enable -->
+                        <Grid Margin="0,4,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                <TextBlock Text="Enable Trading Paints downloader"
+                                           FontSize="13" FontWeight="SemiBold"/>
+                                <TextBlock Text="Auto-fetches custom paints for drivers in the current iRacing session"
+                                           FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                           Margin="0,2,0,0"/>
+                            </StackPanel>
+                            <CheckBox Grid.Column="1" IsChecked="{Binding Enabled}"
+                                      Style="{StaticResource ToggleSwitch}"
+                                      VerticalAlignment="Center" Margin="12,0,0,0"/>
+                        </Grid>
+
+                        <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                        <!-- Paint folder -->
+                        <StackPanel Margin="0,4,0,4">
+                            <TextBlock Text="Paint folder" FontSize="13" FontWeight="SemiBold"/>
+                            <TextBlock Margin="0,2,0,6" FontSize="11" TextWrapping="Wrap"
+                                       Foreground="{StaticResource TextTertiary}">
+                                <Run Text="Leave empty to use default: "/>
+                                <Run Text="{Binding DefaultFolder, Mode=OneWay}" FontFamily="Consolas"/>
+                            </TextBlock>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox Grid.Column="0" Text="{Binding Folder, UpdateSourceTrigger=PropertyChanged}"
+                                         Height="30" VerticalContentAlignment="Center" FontSize="12"/>
+                                <Button Grid.Column="1" Content="Browse…"
+                                        Command="{Binding BrowseFolderCommand}"
+                                        Padding="12,6" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                                <Button Grid.Column="2" Content="Default"
+                                        Command="{Binding ResetFolderToDefaultCommand}"
+                                        Padding="12,6" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                                <Button Grid.Column="3" Content="Open"
+                                        Command="{Binding OpenFolderCommand}"
+                                        Padding="12,6" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                            </Grid>
+                        </StackPanel>
+
+                        <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                        <!-- Max download speed -->
+                        <Grid Margin="0,4,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                <TextBlock Text="Max download speed" FontSize="13" FontWeight="SemiBold"/>
+                                <TextBlock Text="In KB/s. 0 = unlimited. Default: 1024"
+                                           FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                           Margin="0,2,0,0"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                        VerticalAlignment="Center" Margin="12,0,0,0">
+                                <TextBox Text="{Binding MaxDownloadKbpsText, UpdateSourceTrigger=LostFocus}"
+                                         Width="90" Height="30" VerticalContentAlignment="Center"
+                                         FontSize="12" TextAlignment="Right"/>
+                                <TextBlock Text="KB/s" VerticalAlignment="Center"
+                                           Margin="8,0,0,0" FontSize="12"
+                                           Foreground="{StaticResource TextTertiary}"/>
+                            </StackPanel>
+                        </Grid>
+
+                    </StackPanel>
+                </Border>
+
+                <!-- ===== Auto Cleanup ===== -->
+                <TextBlock Text="Auto Cleanup" FontSize="20" FontWeight="Light"
+                           Foreground="{StaticResource TextSecondary}" Margin="0,0,0,12"/>
+                <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                        CornerRadius="6" Background="{StaticResource BgSecondary}"
+                        Padding="14,12" Margin="0,0,0,20">
+                    <StackPanel>
+
+                        <!-- Age -->
+                        <Grid Margin="0,4,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                <TextBlock Text="Delete files older than" FontSize="13" FontWeight="SemiBold"/>
+                                <TextBlock Text="Based on file modification time. Default: 30 days"
+                                           FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                           Margin="0,2,0,0"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                        VerticalAlignment="Center" Margin="12,0,0,0">
+                                <TextBox Text="{Binding AutoCleanupDaysText, UpdateSourceTrigger=LostFocus}"
+                                         Width="70" Height="30" VerticalContentAlignment="Center"
+                                         FontSize="12" TextAlignment="Right"/>
+                                <TextBlock Text="days" VerticalAlignment="Center"
+                                           Margin="8,0,0,0" FontSize="12"
+                                           Foreground="{StaticResource TextTertiary}"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                        <!-- Cleanup on startup -->
+                        <Grid Margin="0,4,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                <TextBlock Text="Run cleanup on app startup"
+                                           FontSize="13" FontWeight="SemiBold"/>
+                                <TextBlock Text="Performs one cleanup pass when BeeHive VR starts"
+                                           FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                           Margin="0,2,0,0"/>
+                            </StackPanel>
+                            <CheckBox Grid.Column="1" IsChecked="{Binding CleanupOnStartup}"
+                                      Style="{StaticResource ToggleSwitch}"
+                                      VerticalAlignment="Center" Margin="12,0,0,0"/>
+                        </Grid>
+
+                        <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                        <!-- Manual -->
+                        <Grid Margin="0,4,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                <TextBlock Text="Clean up now" FontSize="13" FontWeight="SemiBold"/>
+                                <TextBlock Text="Run a cleanup pass immediately using the age above"
+                                           FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                           Margin="0,2,0,0"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" Content="Clean up"
+                                    Command="{Binding CleanupNowCommand}"
+                                    Padding="12,6" VerticalAlignment="Center"
+                                    Margin="12,0,0,0"/>
+                        </Grid>
+
+                    </StackPanel>
+                </Border>
+
+                <!-- ===== Disclaimer ===== -->
+                <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                        CornerRadius="6" Background="{StaticResource BgSecondary}"
+                        Padding="14,12" Margin="0,0,0,8">
+                    <StackPanel>
+                        <TextBlock FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                   TextWrapping="Wrap" FontStyle="Italic">
+                            BeeHive VR is an independent project and is not affiliated with,
+                            endorsed by, or sponsored by Trading Paints. All trademarks, logos
+                            and brand names are property of their respective owners.
+                        </TextBlock>
+                        <TextBlock FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                   TextWrapping="Wrap" FontStyle="Italic" Margin="0,6,0,0">
+                            This app simply uses publicly available Trading Paints endpoints
+                            to fetch custom paint files for use with iRacing.
+                        </TextBlock>
+                    </StackPanel>
+                </Border>
+
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Status line -->
+        <Border Grid.Row="2" BorderBrush="{StaticResource BorderTertiary}"
+                BorderThickness="0,1,0,0" Padding="0,8,0,0" Margin="0,8,0,0">
+            <TextBlock Text="{Binding StatusText}"
+                       FontSize="11" Foreground="{StaticResource TextTertiary}"
+                       FontStyle="Italic" TextWrapping="Wrap"/>
+        </Border>
+
+    </Grid>
+</UserControl>
