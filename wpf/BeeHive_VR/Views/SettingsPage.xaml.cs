@@ -148,4 +148,71 @@ public partial class SettingsPage : UserControl
     {
 
     }
+
+    // -------- Appearance Nav-Order Drag-Reorder --------------------------
+    // Pattern identisch zu LayoutPage.Overlays_* — DragOver verschiebt live,
+    // Drop ist No-op. Drag startet NUR am Griff (Tag="drag").
+    private System.Windows.Point _navDragStart;
+    private NavItemViewModel? _navDragItem;
+
+    private void NavOrder_PreviewMouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        _navDragStart = e.GetPosition(null);
+        _navDragItem = (e.OriginalSource is FrameworkElement { Tag: "drag" })
+            ? FindNavItem(e.OriginalSource)
+            : null;
+    }
+
+    private void NavOrder_PreviewMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (e.LeftButton != System.Windows.Input.MouseButtonState.Pressed || _navDragItem == null)
+            return;
+
+        var pos = e.GetPosition(null);
+        if (System.Math.Abs(pos.X - _navDragStart.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            System.Math.Abs(pos.Y - _navDragStart.Y) < SystemParameters.MinimumVerticalDragDistance)
+            return;
+
+        var item = _navDragItem;
+        _navDragItem = null;
+        DragDrop.DoDragDrop(NavOrderList, item, DragDropEffects.Move);
+    }
+
+    private void NavOrder_DragOver(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetData(typeof(NavItemViewModel)) is not NavItemViewModel dragged)
+        {
+            e.Effects = DragDropEffects.None;
+            return;
+        }
+        e.Effects = DragDropEffects.Move;
+
+        var coll = (System.Windows.Application.Current?.MainWindow as MainWindow)?
+                   .DataContext is MainViewModel mvm ? mvm.NavItems : null;
+        if (coll == null) return;
+
+        var target = FindNavItem(e.OriginalSource);
+        if (target == null || ReferenceEquals(target, dragged)) return;
+
+        int oldIndex = coll.IndexOf(dragged);
+        int newIndex = coll.IndexOf(target);
+        if (oldIndex < 0 || newIndex < 0 || oldIndex == newIndex) return;
+        coll.Move(oldIndex, newIndex);   // löst PersistNavOrder im MainViewModel aus
+    }
+
+    private void NavOrder_Drop(object sender, DragEventArgs e)
+    {
+        // Reihenfolge wurde bereits live in DragOver übernommen.
+    }
+
+    private static NavItemViewModel? FindNavItem(object? originalSource)
+    {
+        var d = originalSource as System.Windows.DependencyObject;
+        while (d != null)
+        {
+            if (d is FrameworkElement { DataContext: NavItemViewModel n }) return n;
+            d = System.Windows.Media.VisualTreeHelper.GetParent(d);
+        }
+        return null;
+    }
 }

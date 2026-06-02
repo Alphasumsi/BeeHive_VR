@@ -43,7 +43,7 @@
         <!-- ========================================================== -->
         <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="180"/>
+                <ColumnDefinition Width="240"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
@@ -51,8 +51,10 @@
             <Border Grid.Column="0"
                     BorderBrush="{StaticResource BorderTertiary}"
                     BorderThickness="0,0,1,0"
+                    Background="{StaticResource BgSecondary}"
+                    CornerRadius="6"
                     Padding="0,0,8,0">
-                <StackPanel>
+                <StackPanel Margin="0,16,0,0">
                     <Button Content="General" Tag="General"
                             Click="SubNav_Click"
                             Style="{StaticResource SettingsSubNavButton}"/>
@@ -118,6 +120,41 @@
                                     <CheckBox Grid.Column="1" IsChecked="{Binding AutoCreateLayoutOnNewCar}"
                                               Style="{StaticResource ToggleSwitch}"
                                               VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                </Grid>
+
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                                <!-- UI Scale (verschoben aus Appearance) -->
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="UI scale" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Scales the entire window — useful for high-DPI displays"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                VerticalAlignment="Center" Margin="12,0,0,0">
+                                        <Button Content="–" Command="{Binding UiScaleDecreaseCommand}"
+                                                Width="32" Height="30" FontSize="18" FontWeight="SemiBold"
+                                                Padding="0" VerticalContentAlignment="Center"
+                                                HorizontalContentAlignment="Center"/>
+                                        <Border Background="{StaticResource BgPrimary}"
+                                                BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
+                                                CornerRadius="4" MinWidth="60" Height="30"
+                                                Margin="6,0,6,0">
+                                            <TextBlock Text="{Binding UiScalePercent}"
+                                                       FontSize="12" FontWeight="SemiBold"
+                                                       VerticalAlignment="Center" HorizontalAlignment="Center"/>
+                                        </Border>
+                                        <Button Content="+" Command="{Binding UiScaleIncreaseCommand}"
+                                                Width="32" Height="30" FontSize="18" FontWeight="SemiBold"
+                                                Padding="0" VerticalContentAlignment="Center"
+                                                HorizontalContentAlignment="Center"/>
+                                    </StackPanel>
                                 </Grid>
                             </StackPanel>
                         </Border>
@@ -243,94 +280,51 @@
                                 CornerRadius="6" Background="{StaticResource BgSecondary}"
                                 Padding="14,12" Margin="0,0,0,16">
                             <StackPanel>
-                                <Grid Margin="0,4,0,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                        <TextBlock Text="UI scale" FontSize="13" FontWeight="SemiBold"/>
-                                        <TextBlock Text="Scales the entire window — useful for high-DPI displays"
-                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
-                                                   Margin="0,2,0,0"/>
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="1" Orientation="Horizontal"
-                                                VerticalAlignment="Center" Margin="12,0,0,0">
-                                        <Button Content="–" Command="{Binding UiScaleDecreaseCommand}"
-                                                Width="32" Height="30" FontSize="18" FontWeight="SemiBold"
-                                                Padding="0" VerticalContentAlignment="Center"
-                                                HorizontalContentAlignment="Center"/>
-                                        <Border Background="{StaticResource BgPrimary}"
-                                                BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
-                                                CornerRadius="4" MinWidth="60" Height="30"
-                                                Margin="6,0,6,0">
-                                            <TextBlock Text="{Binding UiScalePercent}"
-                                                       FontSize="12" FontWeight="SemiBold"
-                                                       VerticalAlignment="Center" HorizontalAlignment="Center"/>
-                                        </Border>
-                                        <Button Content="+" Command="{Binding UiScaleIncreaseCommand}"
-                                                Width="32" Height="30" FontSize="18" FontWeight="SemiBold"
-                                                Padding="0" VerticalContentAlignment="Center"
-                                                HorizontalContentAlignment="Center"/>
-                                    </StackPanel>
-                                </Grid>
+                                <TextBlock Text="Drag the rows to change the nav-icon order. Toggle to show or hide."
+                                           FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                           FontStyle="Italic" TextWrapping="Wrap" Margin="0,0,0,8"/>
 
-                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
-
-                                <!-- Icon-Nav Sichtbarkeit -->
-                                <Grid Margin="0,4,0,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                        <TextBlock Text="Show Dashies" FontSize="13" FontWeight="SemiBold"/>
-                                        <TextBlock Text="In-app config tab for the irDashies overlays"
-                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
-                                                   Margin="0,2,0,0"/>
-                                    </StackPanel>
-                                    <CheckBox Grid.Column="1" IsChecked="{Binding ShowDashies}"
-                                              Style="{StaticResource ToggleSwitch}"
-                                              VerticalAlignment="Center" Margin="12,0,0,0"/>
-                                </Grid>
-
-                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
-
-                                <Grid Margin="0,4,0,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                        <TextBlock Text="Show Trading Paints" FontSize="13" FontWeight="SemiBold"/>
-                                        <TextBlock Text="Show the Trading Paints icon in the navigation bar"
-                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
-                                                   Margin="0,2,0,0"/>
-                                    </StackPanel>
-                                    <CheckBox Grid.Column="1" IsChecked="{Binding ShowTradingPaints}"
-                                              Style="{StaticResource ToggleSwitch}"
-                                              VerticalAlignment="Center" Margin="12,0,0,0"/>
-                                </Grid>
-
-                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
-
-                                <Grid Margin="0,4,0,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                        <TextBlock Text="Language" FontSize="13" FontWeight="SemiBold"/>
-                                        <TextBlock Text="Application language (English / Deutsch)"
-                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
-                                                   Margin="0,2,0,0"/>
-                                    </StackPanel>
-                                    <ComboBox Grid.Column="1" IsEnabled="False"
-                                              VerticalAlignment="Center" Height="30" Width="160"
-                                              Margin="12,0,0,0">
-                                        <ComboBoxItem Content="English" IsSelected="True"/>
-                                    </ComboBox>
-                                </Grid>
+                                <!-- ItemsControl bindet an MainViewModel.NavItems (RelativeSource zum
+                                     Fenster, da SettingsPage selbst SettingsViewModel im DataContext hat).
+                                     Drag-Reorder läuft über das ItemsControl mit Tag="drag"-Griff,
+                                     gleiche Mechanik wie Overlays_* in LayoutPage. -->
+                                <ItemsControl x:Name="NavOrderList"
+                                              ItemsSource="{Binding DataContext.NavItems,
+                                                  RelativeSource={RelativeSource AncestorType=Window}}"
+                                              AllowDrop="True"
+                                              PreviewMouseLeftButtonDown="NavOrder_PreviewMouseLeftButtonDown"
+                                              PreviewMouseMove="NavOrder_PreviewMouseMove"
+                                              DragOver="NavOrder_DragOver"
+                                              Drop="NavOrder_Drop">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border BorderBrush="{StaticResource BorderTertiary}"
+                                                    BorderThickness="1" CornerRadius="4"
+                                                    Background="{StaticResource BgTertiary}"
+                                                    Padding="10,8" Margin="0,2">
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <!-- Drag-Griff -->
+                                                    <TextBlock Grid.Column="0" Tag="drag" Cursor="SizeAll"
+                                                               Text="⋮⋮" FontSize="16"
+                                                               Foreground="{StaticResource TextTertiary}"
+                                                               VerticalAlignment="Center"
+                                                               Margin="0,0,10,0"/>
+                                                    <TextBlock Grid.Column="1" Text="{Binding Tooltip}"
+                                                               FontSize="13" FontWeight="SemiBold"
+                                                               VerticalAlignment="Center"/>
+                                                    <CheckBox Grid.Column="2" IsChecked="{Binding IsVisible}"
+                                                              Style="{StaticResource ToggleSwitch}"
+                                                              VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                                </Grid>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
                             </StackPanel>
                         </Border>
                     </StackPanel>
@@ -594,54 +588,14 @@
                             </StackPanel>
                         </Border>
 
-                        <!-- Experimental tabs (Nav-Icons nur im Dev-Mode + Toggle) -->
-                        <TextBlock Text="Experimental tabs" FontSize="13" FontWeight="SemiBold"
+                        <!-- Bottom-Group-Toggles -->
+                        <TextBlock Text="Bottom-group toggles" FontSize="13" FontWeight="SemiBold"
                                    Foreground="{StaticResource TextSecondary}"
                                    Margin="0,4,0,6"/>
                         <Border BorderBrush="{StaticResource BorderTertiary}" BorderThickness="1"
                                 CornerRadius="6" Background="{StaticResource BgSecondary}"
                                 Padding="14,12" Margin="0,0,0,16">
                             <StackPanel>
-                                <TextBlock Text="These nav icons only appear while Dev mode is on. Overlays already added to a layout keep working regardless."
-                                           FontSize="11" Foreground="{StaticResource TextTertiary}"
-                                           FontStyle="Italic" TextWrapping="Wrap" Margin="0,0,0,8"/>
-
-                                <Grid Margin="0,4,0,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                        <TextBlock Text="Show Autostart" FontSize="13" FontWeight="SemiBold"/>
-                                        <TextBlock Text="Autostart icon in the navigation bar (work in progress)"
-                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
-                                                   Margin="0,2,0,0"/>
-                                    </StackPanel>
-                                    <CheckBox Grid.Column="1" IsChecked="{Binding ShowAutostart}"
-                                              Style="{StaticResource ToggleSwitch}"
-                                              VerticalAlignment="Center" Margin="12,0,0,0"/>
-                                </Grid>
-
-                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
-
-                                <Grid Margin="0,4,0,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                        <TextBlock Text="Show Buttonbox" FontSize="13" FontWeight="SemiBold"/>
-                                        <TextBlock Text="Buttonbox icon in the navigation bar (work in progress)"
-                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
-                                                   Margin="0,2,0,0"/>
-                                    </StackPanel>
-                                    <CheckBox Grid.Column="1" IsChecked="{Binding ShowButtonbox}"
-                                              Style="{StaticResource ToggleSwitch}"
-                                              VerticalAlignment="Center" Margin="12,0,0,0"/>
-                                </Grid>
-
-                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
-
                                 <Grid Margin="0,4,0,4">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>

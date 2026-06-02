@@ -63,6 +63,8 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private string _browserHostExecutable = "";
 
     // --- Icon-Nav Sichtbarkeit (Appearance) ------------------------------
+    [ObservableProperty] private bool _showMenu = true;
+    [ObservableProperty] private bool _showLayout = true;
     [ObservableProperty] private bool _showTradingPaints = true;
     [ObservableProperty] private bool _showAutostart;
     [ObservableProperty] private bool _showButtonbox;
@@ -114,6 +116,8 @@ public partial class SettingsViewModel : ObservableObject
         RememberWindowPositionAndScale = s.RememberWindowPositionAndScale;
         StartPage = s.StartPage;
         BrowserHostExecutable = s.BrowserHostExecutable;
+        ShowMenu = s.ShowMenu;
+        ShowLayout = s.ShowLayout;
         ShowTradingPaints = s.ShowTradingPaints;
         ShowAutostart = s.ShowAutostart;
         ShowButtonbox = s.ShowButtonbox;
@@ -141,6 +145,8 @@ public partial class SettingsViewModel : ObservableObject
         RememberWindowPositionAndScale = false;
         StartPage = "Layout";
         BrowserHostExecutable = "";
+        ShowMenu = true;
+        ShowLayout = true;
         ShowTradingPaints = true;
         ShowAutostart = false;
         ShowButtonbox = false;
@@ -161,6 +167,8 @@ public partial class SettingsViewModel : ObservableObject
         s.RememberWindowPositionAndScale = RememberWindowPositionAndScale;
         s.StartPage = StartPage;
         s.BrowserHostExecutable = BrowserHostExecutable;
+        s.ShowMenu = ShowMenu;
+        s.ShowLayout = ShowLayout;
         s.ShowTradingPaints = ShowTradingPaints;
         s.ShowAutostart = ShowAutostart;
         s.ShowButtonbox = ShowButtonbox;
@@ -187,6 +195,8 @@ public partial class SettingsViewModel : ObservableObject
 
     // Icon-Nav-Sichtbarkeit: persistieren + live an die MainViewModel spiegeln
     // (die Nav-Buttons binden dort, gleiche Mechanik wie UiScale → MainWindow).
+    partial void OnShowMenuChanged(bool value) { SyncNav(); AutoSave(); }
+    partial void OnShowLayoutChanged(bool value) { SyncNav(); AutoSave(); }
     partial void OnShowTradingPaintsChanged(bool value) { SyncNav(); AutoSave(); }
     partial void OnShowAutostartChanged(bool value) { SyncNav(); AutoSave(); }
     partial void OnShowButtonboxChanged(bool value) { SyncNav(); AutoSave(); }
@@ -199,6 +209,8 @@ public partial class SettingsViewModel : ObservableObject
         if (System.Windows.Application.Current?.MainWindow is MainWindow mw
             && mw.DataContext is MainViewModel mvm)
         {
+            mvm.ShowMenu = ShowMenu;
+            mvm.ShowLayout = ShowLayout;
             mvm.ShowTradingPaints = ShowTradingPaints;
             mvm.ShowAutostart = ShowAutostart;
             mvm.ShowButtonbox = ShowButtonbox;

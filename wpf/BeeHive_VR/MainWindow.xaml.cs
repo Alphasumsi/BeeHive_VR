@@ -115,23 +115,22 @@ public partial class MainWindow : Window
     private void ToggleOverlaysVisible_Click(object sender, RoutedEventArgs e)
         => VM?.ToggleOverlaysVisibleCommand.Execute(null);
 
-    // -------- Icon-Nav-Sektionen (Platzhalter — Inhalte kommen später) ----
-    private void NavMenu_Click(object sender, RoutedEventArgs e) => SetSection("Menu");
-    private void NavLayout_Click(object sender, RoutedEventArgs e) => SetSection("Layout");
+    // -------- Icon-Nav-Sektionen ------------------------------------------
+    // Top-Group läuft generisch über NavItem_Click + Tag="{Binding Section}"
+    // (siehe NavItems ItemsControl in MainWindow.xaml). Bottom-Group ist
+    // hartcodiert und hat eigene Click-Handler.
+    private void NavItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement fe && fe.Tag is string section)
+            SetSection(section);
+    }
     private void NavDebug_Click(object sender, RoutedEventArgs e) => SetSection("Debug");
-    private void NavTP_Click(object sender, RoutedEventArgs e) => SetSection("Trading Paints");
     private void NavSettings_Click(object sender, RoutedEventArgs e)
     {
         VM?.RegisterSettingsClickForDevMode();
         SetSection("Settings");
     }
     private void NavHelp_Click(object sender, RoutedEventArgs e) => SetSection("Help");
-
-    private void NavDashies_Click(object sender, RoutedEventArgs e) => SetSection("Dashies");
-
-    // Platzhalter-Sektionen (Inhalt kommt später)
-    private void NavAutostart_Click(object sender, RoutedEventArgs e) => SetSection("Autostart");
-    private void NavButtonbox_Click(object sender, RoutedEventArgs e) => SetSection("Buttonbox");
 
     private void SetSection(string section)
     {

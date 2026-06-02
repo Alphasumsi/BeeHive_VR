@@ -39,8 +39,14 @@ public class SettingsModel
     public string BrowserHostExecutable { get; set; } = "";
 
     // --- UI ---------------------------------------------------------------
-    // Icon-Nav Sichtbarkeit (Appearance-Toggles). TradingPaints existiert schon,
-    // die drei anderen sind vorerst Platzhalter (Default aus).
+    // Icon-Nav Sichtbarkeit (Appearance-Toggles). Menu/Layout/TradingPaints
+    // standardmäßig an; Autostart/Buttonbox sind Dev-Platzhalter.
+    [JsonPropertyName("showMenu")]
+    public bool ShowMenu { get; set; } = true;
+
+    [JsonPropertyName("showLayout")]
+    public bool ShowLayout { get; set; } = true;
+
     [JsonPropertyName("showTradingPaints")]
     public bool ShowTradingPaints { get; set; } = true;
 
@@ -98,4 +104,12 @@ public class SettingsModel
     /// <summary>Bei App-Start einmal Cleanup laufen lassen.</summary>
     [JsonPropertyName("tradingPaintsCleanupOnStartup")]
     public bool TradingPaintsCleanupOnStartup { get; set; } = false;
+
+    /// <summary>
+    /// Reihenfolge der Top-Group-Nav-Icons. Section-Keys in der gewünschten
+    /// Reihenfolge. Unbekannte Keys werden ignoriert, fehlende Keys werden
+    /// hinten angehängt.
+    /// </summary>
+    [JsonPropertyName("navOrder")]
+    public string[]? NavOrder { get; set; }
 }

@@ -99,6 +99,8 @@ public partial class MainViewModel : ObservableObject
 
     // Icon-Nav-Sichtbarkeit — Nav-Buttons binden hier, gesetzt aus den
     // Appearance-Toggles (SettingsViewModel.SyncNav) bzw. initial aus dem Store.
+    [ObservableProperty] private bool _showMenu = true;
+    [ObservableProperty] private bool _showLayout = true;
     [ObservableProperty] private bool _showTradingPaints = true;
     [ObservableProperty] private bool _showAutostart;
     [ObservableProperty] private bool _showButtonbox;
@@ -205,12 +207,18 @@ public partial class MainViewModel : ObservableObject
         // Icon-Nav-Sichtbarkeit initial aus dem Store (SettingsStore ist in
         // App.OnStartup vor dem MainWindow geladen).
         var cfg = SettingsStore.Current;
+        ShowMenu = cfg.ShowMenu;
+        ShowLayout = cfg.ShowLayout;
         ShowTradingPaints = cfg.ShowTradingPaints;
         ShowAutostart = cfg.ShowAutostart;
         ShowButtonbox = cfg.ShowButtonbox;
         ShowDashies = cfg.ShowDashies;
         ShowHelp = cfg.ShowHelp;
         AutoCreateLayoutOnNewCar = cfg.AutoCreateLayoutOnNewCar;
+
+        // Nav-Items aufbauen — Reihenfolge kommt aus SettingsStore.NavOrder
+        // (fehlende Keys werden hinten angehängt, unbekannte Keys ignoriert).
+        InitNavItems(cfg.NavOrder);
 
         // Initialer Stand + Live-Updates vom IRacingService
         var iracing = IRacingService.Instance;
@@ -1404,4 +1412,106 @@ public partial class MainViewModel : ObservableObject
             s.Scale = Scale; s.Opacity = Opacity;
         }
     }
+
+    // ===== Nav-Bar (Top-Group) — ItemsControl-Datasource ===================
+    //
+    // Reihenfolge der NavItems-Collection bestimmt die Anzeigereihenfolge
+    // sowohl im Icon-Nav (MainWindow ItemsControl) als auch in der
+    // Appearance-Drag-List (SettingsPage). Drag-Reorder dort triggert
+    // PersistNavOrder().
+
+    public ObservableCollection<NavItemViewModel> NavItems { get; } = new();
+
+    private void InitNavItems(string[]? savedOrder)
+    {
+        // Statische Metadata aller Top-Group-Items. Bottom-Group (Settings,
+        // Debug, Help) bleibt hartcodiert im XAML — kein Reorder.
+        var all = new List<NavItemViewModel>
+        {
+            new() { Section = "Menu",          Tooltip = "Menu",
+                    IconGeometry = "M3 12 L12 3 L21 12 M5 10 V21 H19 V10",
+                    IsVisible = ShowMenu, VisibilityChanged = OnNavVisibilityChanged },
+            new() { Section = "Layout",        Tooltip = "VR-Layouts",
+                    IconGeometry = "M3,3 H10 V10 H3 Z M14,3 H21 V10 H14 Z M3,14 H10 V21 H3 Z M14,14 H21 V21 H14 Z",
+                    IsVisible = ShowLayout, VisibilityChanged = OnNavVisibilityChanged },
+            new() { Section = "Trading Paints", Tooltip = "Trading Paints",
+                    IconGeometry = "M3 21 L8 16 a3 3 0 0 1 4 0 a3 3 0 0 1 0 4 L7 21 Z M10 14 L19 5 a2 2 0 0 1 3 0 a2 2 0 0 1 0 3 L13 17 Z",
+                    IsVisible = ShowTradingPaints, VisibilityChanged = OnNavVisibilityChanged },
+            new() { Section = "Dashies",       Tooltip = "Dashies",
+                    IconGeometry = "M4 7 H14 M18 7 H20 M4 12 H8 M12 12 H20 M4 17 H16 M20 17 H20 M14 5 a2 2 0 1 1 0 4 a2 2 0 1 1 0 -4 M8 10 a2 2 0 1 1 0 4 a2 2 0 1 1 0 -4 M16 15 a2 2 0 1 1 0 4 a2 2 0 1 1 0 -4",
+                    IsVisible = ShowDashies, VisibilityChanged = OnNavVisibilityChanged },
+            new() { Section = "Autostart",     Tooltip = "Autostart",
+                    IconGeometry = "M13 2 L4 14 H11 L9 22 L20 10 H13 Z",
+                    IsExperimental = true, IsVisible = ShowAutostart, VisibilityChanged = OnNavVisibilityChanged },
+            new() { Section = "Buttonbox",     Tooltip = "Buttonbox",
+                    IconGeometry = "M3 5 H21 V19 H3 Z M7 10 h0.01 M12 10 h0.01 M17 10 h0.01 M7 15 h0.01 M12 15 h0.01 M17 15 h0.01",
+                    IsExperimental = true, IsVisible = ShowButtonbox, VisibilityChanged = OnNavVisibilityChanged },
+        };
+
+        // Initial-Reihenfolge anwenden: erst alle Items aus savedOrder
+        // (existing keys only), dann fehlende ans Ende.
+        NavItems.Clear();
+        if (savedOrder != null)
+        {
+            foreach (var key in savedOrder)
+            {
+                var item = all.FirstOrDefault(x => x.Section == key);
+                if (item != null) { NavItems.Add(item); all.Remove(item); }
+            }
+        }
+        foreach (var rest in all) NavItems.Add(rest);
+
+        // Initial-Active markieren (sonst leuchtet beim Start kein Icon).
+        SyncNavActive(ActiveSection);
+        // CollectionChanged → Persistenz (Drag-Move triggert das automatisch).
+        NavItems.CollectionChanged += (_, _) => PersistNavOrder();
+    }
+
+    private void SyncNavActive(string section)
+    {
+        foreach (var item in NavItems) item.IsActive = item.Section == section;
+    }
+
+    private void SyncNavVisibility(string section, bool value)
+    {
+        var item = NavItems.FirstOrDefault(x => x.Section == section);
+        if (item != null) item.IsVisible = value;
+    }
+
+    private void PersistNavOrder()
+    {
+        SettingsStore.Current.NavOrder = NavItems.Select(x => x.Section).ToArray();
+        SettingsStore.Save();
+    }
+
+    private void OnNavVisibilityChanged(NavItemViewModel item)
+    {
+        // Drag-List-Toggle → Show*-Property setzen (führt zu SyncNavVisibility,
+        // ist aber idempotent weil IsVisible bereits den neuen Wert hat).
+        switch (item.Section)
+        {
+            case "Menu":           ShowMenu = item.IsVisible; break;
+            case "Layout":         ShowLayout = item.IsVisible; break;
+            case "Trading Paints": ShowTradingPaints = item.IsVisible; break;
+            case "Dashies":        ShowDashies = item.IsVisible; break;
+            case "Autostart":      ShowAutostart = item.IsVisible; break;
+            case "Buttonbox":      ShowButtonbox = item.IsVisible; break;
+        }
+        var s = SettingsStore.Current;
+        s.ShowMenu = ShowMenu;
+        s.ShowLayout = ShowLayout;
+        s.ShowTradingPaints = ShowTradingPaints;
+        s.ShowDashies = ShowDashies;
+        s.ShowAutostart = ShowAutostart;
+        s.ShowButtonbox = ShowButtonbox;
+        SettingsStore.Save();
+    }
+
+    partial void OnActiveSectionChanged(string value) => SyncNavActive(value);
+    partial void OnShowMenuChanged(bool value)          => SyncNavVisibility("Menu", value);
+    partial void OnShowLayoutChanged(bool value)        => SyncNavVisibility("Layout", value);
+    partial void OnShowTradingPaintsChanged(bool value) => SyncNavVisibility("Trading Paints", value);
+    partial void OnShowDashiesChanged(bool value)       => SyncNavVisibility("Dashies", value);
+    partial void OnShowAutostartChanged(bool value)     => SyncNavVisibility("Autostart", value);
+    partial void OnShowButtonboxChanged(bool value)     => SyncNavVisibility("Buttonbox", value);
 }
