@@ -309,9 +309,12 @@ public partial class MainViewModel : ObservableObject
             AutoSwitchLayoutForCar(LiveCar);
         }
 
-        // Hinweis: KEIN Auto-Session-Switch mehr auf SelectedSession. Welche
-        // Session live ins VR geht, bestimmt _overlayContext (kontext-gegated
-        // in PushCurrentLayoutToEngine). Die Pills = nur Bearbeitung.
+        // Auto-Session-Switch passiert NICHT hier, sondern weiter unten via
+        // OverlayContext-Debounce: jede iRacing-Änderung triggert
+        // RecomputeContextDebounced → ContextDebounceTick (500 ms Stabilität)
+        // → PushCurrentLayoutToEngine (Live-VR folgt) + ApplyEditorFollow
+        // (Pille folgt bei echtem Kontext-Wechsel, manuelle Pille-Wahl
+        // dazwischen bleibt erhalten).
     }
 
     /// <summary>
