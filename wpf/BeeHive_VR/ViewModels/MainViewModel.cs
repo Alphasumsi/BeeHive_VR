@@ -731,6 +731,10 @@ public partial class MainViewModel : ObservableObject
                 QuatX   = qx, QuatY = qy, QuatZ = qz, QuatW = qw,
                 SizeW   = widthM, SizeH = heightM,
                 Visible = s.Visible,
+                // URL des Widgets — Electron setzt damit den richtigen Iframe-Inhalt
+                // pro Atlas-Region. Browser-Sources tragen die volle dashie-URL,
+                // Window-Sources (Phase D, später) hätten hier leer/null.
+                Target  = string.IsNullOrEmpty(s.Target) ? null : s.Target,
             };
         }
     }

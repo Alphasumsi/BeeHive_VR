@@ -35,6 +35,14 @@ public sealed class AtlasQuadDto
     [JsonPropertyName("sizeW")]   public float SizeW { get; set; } = 0.4f;
     [JsonPropertyName("sizeH")]   public float SizeH { get; set; } = 0.3f;
     [JsonPropertyName("visible")] public bool Visible { get; set; } = true;
+
+    /// <summary>
+    /// Voll qualifizierte URL des Widgets (z.B. <c>http://localhost:8723/dashie.html?widget=relative</c>).
+    /// Electron setzt damit dynamisch den Iframe-Inhalt der zugewiesenen Atlas-Region —
+    /// ohne diese Angabe würde der Iframe seine hardcoded Default-URL behalten und
+    /// das falsche Widget zeigen.
+    /// </summary>
+    [JsonPropertyName("target")]  public string? Target { get; set; }
 }
 
 public sealed class EngineSourceStatus
@@ -166,10 +174,16 @@ public sealed class EngineLink
     /// </summary>
     public void PushAtlasLayout(IEnumerable<AtlasQuadDto> quads)
     {
+        var list = quads as IList<AtlasQuadDto> ?? quads.ToList();
+        // ⚠ Diagnose-Log (3.6.2026): zeigt welches Target pro Quad rausgeht.
+        // Wenn Target=<null> trotz vermeintlich gesetzter Source-URL → Bug
+        // sitzt im VM→DTO-Pfad (BuildAtlasQuads / ToModel / FromModel).
+        foreach (var q in list)
+            Logger.Info($"PushAtlasLayout: id={q.Id} target={q.Target ?? "<null>"}");
         var payload = new
         {
             type = "setAtlasLayout",
-            quads = quads,
+            quads = list,
         };
         SendJson(payload);
     }

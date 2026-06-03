@@ -28,6 +28,10 @@ export interface AtlasQuadFromWpf {
   sizeW:   number;
   sizeH:   number;
   visible: boolean;
+  // Voll qualifizierte URL des Widgets (z.B. http://localhost:8723/dashie.html?widget=relative).
+  // main.ts setzt damit per executeJavaScript den Iframe-src der zugewiesenen
+  // Atlas-Region — sonst zeigt die Region ihren statischen Default-Inhalt.
+  target?:  string;
 }
 
 class WpfLink extends EventEmitter {
