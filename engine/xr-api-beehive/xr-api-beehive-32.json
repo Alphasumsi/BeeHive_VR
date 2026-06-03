@@ -4,8 +4,8 @@
     "name": "XR_APILAYER_name",
     "library_path": ".\\XR_APILAYER_name-32.dll",
     "api_version": "1.0",
-    "implementation_version": "1",
-    "description": "An API layer template",
+    "implementation_version": "8",
+    "description": "BeeHive_VR overlay layer v0.8 (Win32) — composites Electron-rendered overlays into the OpenXR frame",
     "functions": {
       "xrNegotiateLoaderApiLayerInterface": "xrNegotiateLoaderApiLayerInterface"
     },
