@@ -61,6 +61,7 @@ public partial class SettingsViewModel : ObservableObject
 
     // --- Engine ----------------------------------------------------------
     [ObservableProperty] private string _browserHostExecutable = "";
+    [ObservableProperty] private string _atlasExecutable = "";
 
     // --- Icon-Nav Sichtbarkeit (Appearance) ------------------------------
     [ObservableProperty] private bool _showMenu = true;
@@ -116,6 +117,7 @@ public partial class SettingsViewModel : ObservableObject
         RememberWindowPositionAndScale = s.RememberWindowPositionAndScale;
         StartPage = s.StartPage;
         BrowserHostExecutable = s.BrowserHostExecutable;
+        AtlasExecutable = s.AtlasExecutable;
         ShowMenu = s.ShowMenu;
         ShowLayout = s.ShowLayout;
         ShowTradingPaints = s.ShowTradingPaints;
@@ -145,6 +147,7 @@ public partial class SettingsViewModel : ObservableObject
         RememberWindowPositionAndScale = false;
         StartPage = "Layout";
         BrowserHostExecutable = "";
+        AtlasExecutable = "";
         ShowMenu = true;
         ShowLayout = true;
         ShowTradingPaints = true;
@@ -167,6 +170,7 @@ public partial class SettingsViewModel : ObservableObject
         s.RememberWindowPositionAndScale = RememberWindowPositionAndScale;
         s.StartPage = StartPage;
         s.BrowserHostExecutable = BrowserHostExecutable;
+        s.AtlasExecutable = AtlasExecutable;
         s.ShowMenu = ShowMenu;
         s.ShowLayout = ShowLayout;
         s.ShowTradingPaints = ShowTradingPaints;
@@ -192,6 +196,7 @@ public partial class SettingsViewModel : ObservableObject
     }
     partial void OnStartPageChanged(string value) => AutoSave();
     partial void OnBrowserHostExecutableChanged(string value) => AutoSave();
+    partial void OnAtlasExecutableChanged(string value) => AutoSave();
 
     // Icon-Nav-Sichtbarkeit: persistieren + live an die MainViewModel spiegeln
     // (die Nav-Buttons binden dort, gleiche Mechanik wie UiScale → MainWindow).

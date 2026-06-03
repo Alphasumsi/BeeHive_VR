@@ -394,6 +394,29 @@
                                                 VerticalAlignment="Center"/>
                                     </Grid>
                                 </StackPanel>
+
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
+                                <StackPanel Margin="0,4,0,4">
+                                    <TextBlock Text="Atlas executable" FontSize="13" FontWeight="SemiBold"/>
+                                    <TextBlock Text="Path to BeeHive_VR_Atlas.exe (Electron renderer). Auto-started when iRacing connects. Leave empty to auto-detect."
+                                               FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                               Margin="0,2,0,6" TextWrapping="Wrap"/>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox Grid.Column="0"
+                                                 Text="{Binding AtlasExecutable}"
+                                                 Height="30" VerticalContentAlignment="Center"
+                                                 FontSize="12"/>
+                                        <Button Grid.Column="1" Content="Browse…"
+                                                Click="BrowseAtlas_Click"
+                                                Padding="12,6" Margin="8,0,0,0"
+                                                VerticalAlignment="Center"/>
+                                    </Grid>
+                                </StackPanel>
                             </StackPanel>
                         </Border>
                     </StackPanel>

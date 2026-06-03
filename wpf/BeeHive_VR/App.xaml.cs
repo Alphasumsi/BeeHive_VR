@@ -73,7 +73,14 @@ namespace BeeHiveVR
 
             base.OnStartup(e);
 
-            // iRacing-Service starten
+            // iRacing-Service starten + Atlas-Auto-Start verkabeln. Bei jedem
+            // Connect wird die Electron-Atlas-Exe hochgefahren (idempotent),
+            // damit der User WPF + iRacing startet und Overlays automatisch
+            // erscheinen — kein manuelles "npm start" mehr.
+            IRacingService.Instance.ConnectionChanged += (_, connected) =>
+            {
+                if (connected) ElectronAtlasService.Instance.Start();
+            };
             IRacingService.Instance.Start();
 
             // Named-Pipe-Server für die Engine-Verbindung
@@ -269,6 +276,10 @@ namespace BeeHiveVR
             // Preview vor dem Adapter beenden — die Vorschau lädt aus dem Adapter,
             // umgekehrte Reihenfolge würde Renderer-Errors loggen.
             DashiesPreviewService.Instance.Close();
+            // Electron-Atlas mit-beenden — damit der nächste WPF-Start mit einem
+            // sauberen Atlas-Prozess anfängt (Single-Instance-Mutex würde sonst
+            // greifen wenn ein Zombie aus der Vorsession noch lebt).
+            ElectronAtlasService.Instance.Stop();
             IrdashiesAdapterService.Instance.Stop();
             RawInputService.Instance.Stop();
             EngineLink.Instance.Stop();

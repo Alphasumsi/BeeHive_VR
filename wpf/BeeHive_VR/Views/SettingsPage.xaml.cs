@@ -108,6 +108,26 @@ public partial class SettingsPage : UserControl
             VM.BrowserHostExecutable = dlg.FileName;
     }
 
+    private void BrowseAtlas_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = "Select BeeHive_VR_Atlas.exe",
+            Filter = "Executable (*.exe)|*.exe|All files (*.*)|*.*",
+            CheckFileExists = true,
+        };
+
+        var current = VM?.AtlasExecutable;
+        if (!string.IsNullOrWhiteSpace(current))
+        {
+            var dir = System.IO.Path.GetDirectoryName(current);
+            if (System.IO.Directory.Exists(dir)) dlg.InitialDirectory = dir;
+        }
+
+        if (dlg.ShowDialog() == true && VM is not null)
+            VM.AtlasExecutable = dlg.FileName;
+    }
+
     // ---- Developer-Section --------------------------------------------------
 
     private void DevReloadConfigs_Click(object sender, RoutedEventArgs e)
