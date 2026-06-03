@@ -90,3 +90,8 @@ typings/
 
 # Electron-Forge
 out/
+
+# Stray Vite-Output an der App-Wurzel (echter Entry ist .vite/build/main.js,
+# package.json#main zeigt darauf — top-level main.js entsteht nur wenn Vite
+# versehentlich gegen den falschen outDir baut).
+/main.js
