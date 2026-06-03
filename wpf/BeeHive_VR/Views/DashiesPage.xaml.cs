@@ -217,6 +217,31 @@ public partial class DashiesPage : UserControl
         PreviewButton.Content = "Preview";
     }
 
+    // ---- Status-Text-Färbung (Helper) -----------------------------------
+    // Eine zentrale Stelle für Erfolg (grün), Fehler (rot), neutral (grau).
+    // App.xaml definiert SuccessText / DangerText / TextTertiary — wir
+    // verwenden die als StaticResource damit das Theme konsistent bleibt.
+    private void ShowStatusOk(string msg)
+    {
+        StatusText.Text = msg;
+        StatusText.SetResourceReference(ForegroundProperty, "SuccessText");
+    }
+    private void ShowStatusError(string msg)
+    {
+        StatusText.Text = msg;
+        StatusText.SetResourceReference(ForegroundProperty, "DangerText");
+    }
+    private void ShowStatusInfo(string msg)
+    {
+        StatusText.Text = msg;
+        StatusText.SetResourceReference(ForegroundProperty, "TextTertiary");
+    }
+    private void ClearStatus()
+    {
+        StatusText.Text = string.Empty;
+        StatusText.SetResourceReference(ForegroundProperty, "TextTertiary");
+    }
+
     private string? SelectedOverlay =>
         (OverlayList.SelectedItem as ListBoxItem)?.Content as string;
 
@@ -224,7 +249,7 @@ public partial class DashiesPage : UserControl
     {
         var name = SelectedOverlay;
         PanelTitle.Text = name ?? "Select an overlay";
-        StatusText.Text = string.Empty;
+        ClearStatus();
 
         bool isInput = name == "Input";
         bool isRel = name == "Relative";
@@ -770,11 +795,11 @@ public partial class DashiesPage : UserControl
             _activeSizeW.Text = sz.Width.ToString();
             _activeSizeH.Text = sz.Height.ToString();
             CommitFormat();
-            StatusText.Text = $"Size from preview: {sz.Width}x{sz.Height}";
+            ShowStatusOk($"Size from preview: {sz.Width}x{sz.Height}");
         }
         else
         {
-            StatusText.Text = "Open the preview first to copy its size.";
+            ShowStatusError("Open the preview first to copy its size.");
         }
     }
 
@@ -785,7 +810,7 @@ public partial class DashiesPage : UserControl
         _activeSizeW.Text = w.ToString();
         _activeSizeH.Text = h.ToString();
         CommitFormat();
-        StatusText.Text = $"Format reset to default ({w}x{h}).";
+        ShowStatusOk($"Format reset to default ({w}x{h}).");
     }
 
     private void SizeField_LostFocus(object sender, RoutedEventArgs e) => CommitFormat();
@@ -815,7 +840,7 @@ public partial class DashiesPage : UserControl
         var id = WidgetId(name);
         if (id == null)
         {
-            StatusText.Text = "Select an overlay first.";
+            ShowStatusError("Select an overlay first.");
             return;
         }
 
@@ -824,9 +849,9 @@ public partial class DashiesPage : UserControl
         // Spotter aktiv → kein aktives Auto nötig (Source geht ins Spotter-Set).
         if (!vm.EditingSpotter && vm.ActiveLayout == null)
         {
-            StatusText.Text = "No active car — set a car as active first " +
-                              "(join a session, or use \"Set as active\" in the Layout tab), " +
-                              "or activate the Spotter set.";
+            ShowStatusError("No active car — set a car as active first " +
+                            "(join a session, or use \"Set as active\" in the Layout tab), " +
+                            "or activate the Spotter set.");
             return;
         }
 
@@ -859,8 +884,22 @@ public partial class DashiesPage : UserControl
             new JsonObject { ["width"] = fw, ["height"] = fh }));
 
         vm.AddSourceToActiveLayout(sv);
-        var target = vm.EditingSpotter ? "Spotter" : (vm.ActiveLayout?.CarName ?? "active car");
-        StatusText.Text = $"Added '{name}' to {target} ({fw}x{fh}{(synced ? " from preview" : "")}).";
+        string target;
+        if (vm.EditingSpotter)
+        {
+            target = "Spotter";
+        }
+        else
+        {
+            var car = vm.ActiveLayout?.CarName ?? "active car";
+            // Session-Info anzeigen, damit dem User klar ist wo's gelandet ist
+            // (Source-Filter folgt der aktiven Pille im Layout-Editor).
+            var sessionLabel = vm.ActiveLayout?.EditingAllSessions == true
+                ? "all sessions"
+                : vm.ActiveLayout?.SelectedSession.ToString().ToLowerInvariant() ?? "active session";
+            target = $"{car} / {sessionLabel}";
+        }
+        ShowStatusOk($"Added '{name}' to {target} ({fw}x{fh}{(synced ? " from preview" : "")}).");
     }
 
     private void Preview_Click(object sender, RoutedEventArgs e)
@@ -872,7 +911,7 @@ public partial class DashiesPage : UserControl
             DashiesPreviewService.Instance.Close();
             IrdashiesAdapterService.Instance.SetMock(false);
             PreviewButton.Content = "Preview";
-            StatusText.Text = "Preview closed.";
+            ShowStatusInfo("Preview closed.");
             return;
         }
 
@@ -880,7 +919,7 @@ public partial class DashiesPage : UserControl
         var id = WidgetId(name);
         if (id == null)
         {
-            StatusText.Text = "Select an overlay first.";
+            ShowStatusError("Select an overlay first.");
             return;
         }
 
@@ -894,12 +933,12 @@ public partial class DashiesPage : UserControl
         {
             _previewOpen = true;
             PreviewButton.Content = "Close Preview";
-            StatusText.Text = $"Preview open: {name} ({w}x{h})";
+            ShowStatusOk($"Preview open: {name} ({w}x{h})");
         }
         else
         {
             IrdashiesAdapterService.Instance.SetMock(false);
-            StatusText.Text = "Preview failed — browser-host.exe not found (set it in Settings).";
+            ShowStatusError("Preview failed — browser-host.exe not found (set it in Settings).");
         }
     }
 
@@ -909,7 +948,7 @@ public partial class DashiesPage : UserControl
         var id = WidgetId(name);
         if (id == null)
         {
-            StatusText.Text = "Select an overlay first.";
+            ShowStatusError("Select an overlay first.");
             return;
         }
 
@@ -921,11 +960,11 @@ public partial class DashiesPage : UserControl
         try
         {
             Clipboard.SetText(url);
-            StatusText.Text = $"Copied: {url}";
+            ShowStatusOk($"Copied: {url}");
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Copy failed: {ex.Message}";
+            ShowStatusError($"Copy failed: {ex.Message}");
         }
     }
 

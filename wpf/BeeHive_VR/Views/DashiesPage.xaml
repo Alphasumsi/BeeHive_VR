@@ -1657,7 +1657,7 @@
                       ToolTip="Feed synthetic telemetry to the preview (no iRacing needed)"/>
             <TextBlock x:Name="StatusText" Text=""
                        VerticalAlignment="Center" Margin="14,0,14,0"
-                       FontSize="11" FontStyle="Italic"
+                       FontSize="13" FontWeight="SemiBold"
                        TextTrimming="CharacterEllipsis"
                        Foreground="{StaticResource TextTertiary}"/>
             <Button x:Name="CopyUrlButton" Content="Copy URL"

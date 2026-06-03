@@ -54,36 +54,17 @@ public partial class CarLayoutViewModel : ObservableObject
         CommitCurrentSession();
     }
 
-    /// <summary>Wechselt Sources zwischen geteilten Instanzen (an) und unabhängigen
-    /// Klonen pro Session (aus). Spotter setzt das von außen hart zurück.</summary>
+    /// <summary>
+    /// EditingAllSessions ist ein UI-Marker für „nachfolgende Add/Remove
+    /// gelten für alle 4 Sessions" (Bulk-Mode). Es ist KEIN Sources-Mirror-
+    /// Mode mehr — Sessions bleiben pro-Session individuell, der Klick
+    /// vereinheitlicht nichts. Bulk-Operationen werden explicit über
+    /// <see cref="AddSourceToAllSessions"/> geroutet.
+    /// </summary>
     partial void OnEditingAllSessionsChanged(bool value)
     {
-        IsRefreshing = true; // Auto-Save soll diesen Listen-Swap ignorieren
-        try
-        {
-            if (value)
-            {
-                // Aktive Sources auf alle Sessions verteilen — eigene Listenkopie
-                // pro Slot (sodass spätere Listen-Operationen sich nicht überlagern),
-                // aber dieselben SourceViewModel-Instanzen (Property-Edits propagieren).
-                var snap = Sources.ToList();
-                foreach (SessionType st in System.Enum.GetValues<SessionType>())
-                    _sessionsData[st] = snap.ToList();
-            }
-            else
-            {
-                // Sessions wieder unabhängig machen: Nicht-Active Sessions
-                // deep-clonen (frische VM-Instanzen mit denselben Werten).
-                foreach (SessionType st in System.Enum.GetValues<SessionType>())
-                {
-                    if (st == SelectedSession) continue;
-                    _sessionsData[st] = _sessionsData[st]
-                        .Select(vm => SourceViewModel.FromModel(vm.ToModel()))
-                        .ToList();
-                }
-            }
-        }
-        finally { IsRefreshing = false; }
+        // No-op: keine Spiegel-Anlage, kein deep-clone-Detach.
+        // Existierende Session-Inhalte bleiben unverändert.
     }
 
     partial void OnSelectedSessionChanged(SessionType value)
@@ -101,22 +82,13 @@ public partial class CarLayoutViewModel : ObservableObject
     /// </summary>
     public bool IsRefreshing { get; private set; }
 
-    /// <summary>Speichert die aktuellen Sources in der aktiven Session. Bei
-    /// <see cref="EditingAllSessions"/> wird der Snapshot in alle drei
-    /// Sessions geschrieben (jede Session eigene Listenkopie, aber dieselben
-    /// VM-Instanzen — so propagieren Property-Edits automatisch).</summary>
+    /// <summary>Speichert die aktuellen Sources in der aktiven Session.
+    /// Greift nur auf SelectedSession — EditingAllSessions ist kein
+    /// Mirror-Mode mehr (Bulk-Ops laufen über
+    /// <see cref="AddSourceToAllSessions"/>).</summary>
     public void CommitCurrentSession()
     {
-        var snap = Sources.ToList();
-        if (EditingAllSessions)
-        {
-            foreach (SessionType st in System.Enum.GetValues<SessionType>())
-                _sessionsData[st] = snap.ToList();
-        }
-        else
-        {
-            _sessionsData[SelectedSession] = snap;
-        }
+        _sessionsData[SelectedSession] = Sources.ToList();
     }
 
     /// <summary>Lädt die Sources der aktiven Session in die UI-Collection.</summary>
@@ -138,10 +110,9 @@ public partial class CarLayoutViewModel : ObservableObject
     /// <summary>Liefert die Sources einer beliebigen Session (intern).</summary>
     public IReadOnlyList<SourceViewModel> GetSessionSources(SessionType st)
     {
-        // Bei EditingAllSessions immer erst committen, damit auch nicht-aktive
-        // Sessions den aktuellen Stand zurückgeben (z.B. wenn iRacing Race
-        // pusht während der User Practice editiert).
-        if (EditingAllSessions || st == SelectedSession) CommitCurrentSession();
+        // Vor dem Lesen: aktive Session's UI-Edits committen, damit
+        // ihre Liste den aktuellen Stand hat.
+        if (st == SelectedSession) CommitCurrentSession();
         return _sessionsData[st];
     }
 
@@ -149,6 +120,19 @@ public partial class CarLayoutViewModel : ObservableObject
     public void SetSessionSources(SessionType st, List<SourceViewModel> sources)
     {
         _sessionsData[st] = sources;
+    }
+
+    /// <summary>
+    /// Bulk-Add: fügt eine Source zu allen Sessions hinzu, ohne die
+    /// existing Session-Listen zu überschreiben. Umgeht bewusst
+    /// <see cref="CommitCurrentSession"/>, das im EditingAllSessions-Modus
+    /// Sources auf alle Sessions spiegelt und damit individuelle Inhalte
+    /// killen würde. Wird vom „All Sessions"-Pille-Add benutzt.
+    /// </summary>
+    public void AddSourceToAllSessions(SourceViewModel sv)
+    {
+        foreach (SessionType st in System.Enum.GetValues<SessionType>())
+            _sessionsData[st].Add(sv);
     }
 
     [RelayCommand]

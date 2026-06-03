@@ -649,9 +649,12 @@ public partial class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Fügt eine Source dem AKTIVEN Auto-Layout hinzu (allen drei Sessions, dieselbe
-    /// VM-Instanz → ein Overlay pro Auto). Speichert + pusht live. Liefert false,
-    /// wenn kein Layout „set as active" ist (Dashies zeigt dann eine Fehlermeldung).
+    /// Fügt eine Source dem AKTIVEN Auto-Layout hinzu. Ziel-Sessions folgen
+    /// der aktiven Pille im Editor: ist <see cref="CarLayoutViewModel.EditingAllSessions"/>
+    /// an, geht die Source in alle vier Sessions; sonst nur in die einzelne
+    /// <see cref="CarLayoutViewModel.SelectedSession"/>. Speichert + pusht live.
+    /// Liefert false wenn kein Layout „set as active" ist (Dashies zeigt
+    /// dann eine Fehlermeldung).
     /// </summary>
     public bool AddSourceToActiveLayout(SourceViewModel sv)
     {
@@ -667,8 +670,20 @@ public partial class MainViewModel : ObservableObject
         if (layout == null) return false;
 
         layout.CommitCurrentSession();
-        foreach (SessionType st in System.Enum.GetValues<SessionType>())
+        if (layout.EditingAllSessions)
         {
+            // „All Sessions"-Pille aktiv: NEUE Source zu allen 4 Sessions
+            // hinzufügen, ohne die individuellen existing Source-Listen zu
+            // überschreiben. Bulk-Add über die dedizierte VM-Methode —
+            // CommitCurrentSession würde hier Sources-Spiegel-Mode greifen
+            // und alle Sessions auf die aktive überschreiben (= killt Inhalt
+            // der anderen Sessions). Ist nicht was der User will.
+            layout.AddSourceToAllSessions(sv);
+        }
+        else
+        {
+            // Nur in die markierte Einzel-Pille
+            var st = layout.SelectedSession;
             var list = layout.GetSessionSources(st).ToList();
             list.Add(sv);
             layout.SetSessionSources(st, list);
