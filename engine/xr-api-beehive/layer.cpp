@@ -339,10 +339,23 @@ namespace openxr_api_layer {
                 return false;
             }
 
-            // (f) Swapchain — same format as source so CopyResource is legal.
+            // (f) Swapchain — Format aus der WGC-Source, aber UNORM → UNORM_SRGB
+            // gemappt: WGC liefert die BrowserWindow-Pixel sRGB-encoded (Chromium
+            // rendert sRGB). Mit UNORM-Swapchain interpretiert der OpenXR-Compositor
+            // die Bytes als linear → Farben kommen blass im HMD an. Mit UNORM_SRGB
+            // weiß der Compositor „die Daten sind sRGB", konvertiert intern korrekt
+            // zu Linear fürs Blending und gibt am Display wieder sauber sRGB raus.
+            // CopyResource zwischen R8G8B8A8_UNORM (Source) und _UNORM_SRGB (Dest)
+            // ist legal — beide gehören zur R8G8B8A8_TYPELESS-Familie.
+            DXGI_FORMAT swapFormat = m_texFormat;
+            if (m_texFormat == DXGI_FORMAT_R8G8B8A8_UNORM)
+                swapFormat = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+            else if (m_texFormat == DXGI_FORMAT_B8G8R8A8_UNORM)
+                swapFormat = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+
             XrSwapchainCreateInfo sci{XR_TYPE_SWAPCHAIN_CREATE_INFO};
             sci.usageFlags = XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
-            sci.format     = (int64_t)m_texFormat;
+            sci.format     = (int64_t)swapFormat;
             sci.width      = m_texWidth;
             sci.height     = m_texHeight;
             sci.sampleCount = 1; sci.faceCount = 1; sci.arraySize = 1; sci.mipCount = 1;
@@ -363,8 +376,8 @@ namespace openxr_api_layer {
             m_swapchainTextures.clear();
             for (auto& img : images) m_swapchainTextures.push_back(img.texture);
 
-            Log(fmt::format("setup: swapchain {}x{} fmt={} imageCount={} — quad live\n",
-                            m_texWidth, m_texHeight, (int)m_texFormat, imageCount));
+            Log(fmt::format("setup: swapchain {}x{} sourceFmt={} swapFmt={} imageCount={} — quad live\n",
+                            m_texWidth, m_texHeight, (int)m_texFormat, (int)swapFormat, imageCount));
             m_swapchainReady = true;
             return true;
         }
