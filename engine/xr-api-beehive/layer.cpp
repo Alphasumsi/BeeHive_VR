@@ -1019,6 +1019,18 @@ void main(uint2 tid : SV_DispatchThreadID)
             z = -sy * sx;
         }
 
+        // True if the slot's rect lies fully inside our current swapchain. WPF
+        // and WGC are not synchronized — during a resize one side races a few
+        // frames ahead of the other. We submit only the rects that fit; the
+        // skipped ones reappear next frame after the WGC FramePool.Recreate().
+        bool QuadRectFitsAtlas(const QuadSlot& s) const {
+            if (s.rectW == 0 || s.rectH == 0) return false;
+            // uint32 + uint32 can theoretically overflow, but Electron caps at
+            // PACKER_MAX_WIDTH=2048 and MAX_QUADS=8 so we're far below uint32.
+            return (s.rectX + s.rectW) <= m_texWidth
+                && (s.rectY + s.rectH) <= m_texHeight;
+        }
+
         // ---------- Per-frame --------------------------------------------------
         // Copy the atlas once, then emit one XrCompositionLayerQuad per visible
         // QuadSlot. Returns the number of quads written to outQuads (≤ kMaxQuads).
@@ -1092,7 +1104,7 @@ void main(uint2 tid : SV_DispatchThreadID)
                 for (uint32_t i = 0; i < requested; ++i) {
                     const QuadSlot& s = slots[i];
                     if (!s.visible) continue;
-                    if (s.rectW == 0 || s.rectH == 0) continue;
+                    if (!QuadRectFitsAtlas(s)) continue;
 
                     D3D11_MAPPED_SUBRESOURCE mapped{};
                     if (FAILED(m_appContext->Map(m_chromaCB.Get(), 0,
@@ -1150,9 +1162,20 @@ void main(uint2 tid : SV_DispatchThreadID)
             // through Electron + WPF + back into the FrameSlot is too laggy
             // for direct-manipulation UX).
             uint32_t written = 0;
+            uint32_t skippedOutOfRange = 0;
             for (uint32_t i = 0; i < requested; ++i) {
                 QuadSlot s = slots[i];
                 if (!s.visible) continue;
+                // C3b (4.6.2026): drop quads whose rect doesn't fit our current
+                // swapchain. WPF can race ahead of the WGC FramePool.Recreate()
+                // when the atlas window grows — for one or two frames the layer
+                // still sees the old surface size while the FrameSlot already
+                // carries the post-pack rects. Submitting an imageRect outside
+                // the swapchain returns XR_ERROR_SWAPCHAIN_RECT_INVALID from
+                // xrEndFrame, which black-screens the whole iRacing session and
+                // wedges the desktop with a TDR. Skipping the offending quads
+                // for one frame is invisible (next frame WGC catches up).
+                if (!QuadRectFitsAtlas(s)) { ++skippedOutOfRange; continue; }
                 if (m_grabHand != -1 && std::strncmp(s.id, m_grabTargetId, 16) == 0) {
                     s.posX = m_dragPosX; s.posY = m_dragPosY; s.posZ = m_dragPosZ;
                     s.quatX = m_dragQuatX; s.quatY = m_dragQuatY;
@@ -1173,6 +1196,15 @@ void main(uint2 tid : SV_DispatchThreadID)
                 q.pose.position    = {s.posX, s.posY, s.posZ};
                 q.pose.orientation = {s.quatX, s.quatY, s.quatZ, s.quatW};
                 q.size             = {s.sizeW, s.sizeH};
+            }
+
+            // Diagnose-Throttle (C3b): wenn ein Rect-Resize-Race quads droppt,
+            // exactly einmal logge das pro neuem Skip-Count damit der User in
+            // engine.log sieht "rebuild kommt gleich". Nicht pro Frame loggen.
+            if (skippedOutOfRange != m_lastSkippedOutOfRange) {
+                Log(fmt::format("atlas: {} quad(s) skipped (rect > swapchain {}x{}) — waiting for WGC resize\n",
+                                skippedOutOfRange, m_texWidth, m_texHeight));
+                m_lastSkippedOutOfRange = skippedOutOfRange;
             }
 
             // Once-per-launch diagnostic so we see the layout the layer is honoring.
@@ -1251,6 +1283,9 @@ void main(uint2 tid : SV_DispatchThreadID)
         bool m_loggedAwaitingFrame{false};
         bool m_loggedHoldoff{false};
         bool m_loggedFirstQuads{false};
+        // C3b: edge-triggered log marker für drop-Counter bei out-of-range rects.
+        // Verhindert pro-Frame-Spam wenn Race länger dauert als ein einzelner Frame.
+        uint32_t m_lastSkippedOutOfRange{0};
         UINT m_texWidth{0};
         UINT m_texHeight{0};
         DXGI_FORMAT m_texFormat{DXGI_FORMAT_UNKNOWN};
