@@ -32,6 +32,9 @@ export interface AtlasQuadFromWpf {
   // main.ts setzt damit per executeJavaScript den Iframe-src der zugewiesenen
   // Atlas-Region — sonst zeigt die Region ihren statischen Default-Inhalt.
   target?:  string;
+  // 0..1 Multiplier auf RGB+Alpha, getrieben vom LayoutPage-Opacity-Slider.
+  // Default 1.0 (voll deckend). Compute-Shader im Layer wendet das pro Quad an.
+  opacity?: number;
 }
 
 class WpfLink extends EventEmitter {

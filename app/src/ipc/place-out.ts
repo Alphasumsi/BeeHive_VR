@@ -22,6 +22,8 @@ const CloseHandle = kernel32.func('bool __stdcall CloseHandle(HANDLE hObject)');
 const GetLastError = kernel32.func('uint32_t __stdcall GetLastError()');
 
 // Byte-for-byte match with the layer's PublishPlaceOut layout (96 bytes).
+// opacity am Ende (B10 ALT-Drag) — Layer schreibt 8 floats statt 7, padding
+// shrinkt entsprechend von 44 auf 40.
 const PlaceOutStruct = koffi.struct('PlaceOut', {
   generation: 'uint64_t',
   id:         koffi.array('char', 16),
@@ -32,7 +34,8 @@ const PlaceOutStruct = koffi.struct('PlaceOut', {
   pitchDeg:   'float32',
   sizeW:      'float32',
   sizeH:      'float32',
-  padding:    koffi.array('uint8', 44),
+  opacity:    'float32',
+  padding:    koffi.array('uint8', 40),
 });
 
 const FILE_MAP_READ = 0x4;
@@ -54,6 +57,7 @@ interface PlaceOutRaw {
   pitchDeg:   number;
   sizeW:      number;
   sizeH:      number;
+  opacity:    number;
 }
 
 export interface PlaceUpdate {
@@ -65,6 +69,7 @@ export interface PlaceUpdate {
   pitchDeg: number;
   sizeW:    number;
   sizeH:    number;
+  opacity:  number;
 }
 
 class PlaceOutReader extends EventEmitter {
@@ -121,6 +126,7 @@ class PlaceOutReader extends EventEmitter {
       pitchDeg: raw.pitchDeg,
       sizeW:    raw.sizeW,
       sizeH:    raw.sizeH,
+      opacity:  raw.opacity,
     };
     this.emit('placeUpdate', u);
   }

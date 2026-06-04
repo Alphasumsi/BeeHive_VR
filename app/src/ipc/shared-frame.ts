@@ -30,7 +30,9 @@ const FrameSlot = koffi.struct('FrameSlot', {
 const FRAME_SLOT_SIZE: number = koffi.sizeof(FrameSlot);
 
 // QuadSlot — one entry per sub-region of the atlas. Byte-for-byte match
-// with the C++ side (76 bytes).
+// with the C++ side (76 bytes). The trailing 4 bytes carry per-quad opacity
+// (was `reserved` before C4 Transparenz) — Layer-Compute-Shader nimmt das
+// als Multiplier auf RGB+Alpha.
 const QuadSlot = koffi.struct('QuadSlot', {
   id:       koffi.array('char', 16),  // ASCII, NUL-terminated, for logging
   rectX:    'uint32_t',
@@ -47,7 +49,7 @@ const QuadSlot = koffi.struct('QuadSlot', {
   sizeW:    'float32',
   sizeH:    'float32',
   visible:  'uint32_t',
-  reserved: 'uint32_t',
+  opacity:  'float32',  // 0..1, default 1.0 (war reserved bis C4)
 });
 const QUAD_SLOT_SIZE: number = koffi.sizeof(QuadSlot);
 
@@ -93,7 +95,8 @@ export interface FramePublish {
 }
 
 // One sub-region of the atlas. id is for human debugging only; layer doesn't
-// match on it. Quat defaults to identity ({0,0,0,1}) if you omit.
+// match on it. Quat defaults to identity ({0,0,0,1}) if you omit. Opacity
+// defaults to 1.0 (voll deckend) — Layer-Shader multipliziert auf RGB+Alpha.
 export interface QuadDesc {
   id:     string;
   rectX:  number;
@@ -110,6 +113,7 @@ export interface QuadDesc {
   sizeW:  number;     // meters
   sizeH:  number;     // meters
   visible?: boolean;
+  opacity?: number;   // 0..1, default 1.0
 }
 
 class SharedFrameChannel {
@@ -144,7 +148,7 @@ class SharedFrameChannel {
       rectX: 0, rectY: 0, rectW: 0, rectH: 0,
       posX: 0, posY: 0, posZ: 0,
       quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-      sizeW: 0, sizeH: 0, visible: 0, reserved: 0,
+      sizeW: 0, sizeH: 0, visible: 0, opacity: 1.0,
     };
     for (let i = 0; i < MAX_QUADS; i++) {
       const offset = FRAME_SLOT_SIZE + i * QUAD_SLOT_SIZE;
@@ -189,7 +193,7 @@ class SharedFrameChannel {
         sizeW:    q.sizeW,
         sizeH:    q.sizeH,
         visible:  (q.visible ?? true) ? 1 : 0,
-        reserved: 0,
+        opacity:  q.opacity ?? 1.0,
       });
     }
   }

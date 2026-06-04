@@ -43,6 +43,12 @@ public sealed class AtlasQuadDto
     /// das falsche Widget zeigen.
     /// </summary>
     [JsonPropertyName("target")]  public string? Target { get; set; }
+
+    /// <summary>
+    /// 0..1 Multiplier auf RGB+Alpha (Compute-Shader im Layer wendet das pro Quad an).
+    /// Default 1.0 = voll deckend. Getrieben vom LayoutPage-Opacity-Slider.
+    /// </summary>
+    [JsonPropertyName("opacity")] public float Opacity { get; set; } = 1.0f;
 }
 
 public sealed class EngineSourceStatus
@@ -65,7 +71,10 @@ public sealed class PlaceUpdate
     public float Yaw { get; set; }
     public float Pitch { get; set; }
     public float Scale { get; set; }
-    public float Opacity { get; set; }
+    /// <summary>Nullable: Layer treibt Opacity heute nicht (ALT-Drag B10 nicht
+    /// implementiert). Wenn null, lässt OnPlaceUpdate die Source-Opacity in
+    /// Ruhe — sonst würde jeder Place-in-VR-Drag den Slider auf 0 ziehen.</summary>
+    public float? Opacity { get; set; }
 }
 
 /// <summary>
@@ -325,6 +334,12 @@ public sealed class EngineLink
                             float F(string n) => root.TryGetProperty(n, out var e) &&
                                                  e.ValueKind == JsonValueKind.Number
                                 ? e.GetSingle() : 0f;
+                            // FOpt liefert null wenn das Feld fehlt — wichtig für
+                            // Opacity: Layer schickt es heute nicht (kein ALT-Drag),
+                            // OnPlaceUpdate soll dann den User-Slider in Ruhe lassen.
+                            float? FOpt(string n) => root.TryGetProperty(n, out var e) &&
+                                                     e.ValueKind == JsonValueKind.Number
+                                ? e.GetSingle() : (float?)null;
                             var pu = new PlaceUpdate
                             {
                                 Id = root.TryGetProperty("id", out var pid) ? pid.GetString() ?? "" : "",
@@ -334,7 +349,7 @@ public sealed class EngineLink
                                 Yaw = F("yaw"),
                                 Pitch = F("pitch"),
                                 Scale = F("scale"),
-                                Opacity = F("opacity"),
+                                Opacity = FOpt("opacity"),
                             };
                             // placeUpdate kommt pro Frame während Trigger-Grab — kein Log,
                             // Werte stehen live in den Slidern und in der JSON.

@@ -753,6 +753,8 @@ public partial class MainViewModel : ObservableObject
                 // pro Atlas-Region. Browser-Sources tragen die volle dashie-URL,
                 // Window-Sources (Phase D, später) hätten hier leer/null.
                 Target  = string.IsNullOrEmpty(s.Target) ? null : s.Target,
+                // C4: Opacity-Slider treibt RGB+Alpha-Multiplier im Layer-Compute-Shader.
+                Opacity = s.Opacity,
             };
         }
     }
@@ -1226,7 +1228,10 @@ public partial class MainViewModel : ObservableObject
             src.Yaw = pu.Yaw;
             src.Pitch = pu.Pitch;
             src.Scale = pu.Scale;
-            src.Opacity = pu.Opacity;
+            // Nur überschreiben wenn Layer wirklich eine Opacity geschickt hat
+            // (heute nie — siehe PlaceUpdate.Opacity Nullable + main.ts schickt
+            // das Feld nicht). Schützt den User-Slider vor 0-Reset bei Drag.
+            if (pu.Opacity.HasValue) src.Opacity = pu.Opacity.Value;
         }
         finally { _suppressEnginePush = prev; }
 

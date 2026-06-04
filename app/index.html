@@ -4,11 +4,18 @@
   <meta charset="UTF-8" />
   <title>BeeHive_VR Atlas</title>
   <style>
+    /* C4 Alpha-Pfad (4.6.2026): body komplett transparent. BrowserWindow ist
+       transparent:true off-screen, WGC capturet die Surface inkl. Alpha-Kanal,
+       Layer-Compute-Shader schleift Alpha 1:1 durch. dashie.html-bodies haben
+       eh keinen eigenen bg → Pixel ohne Widget-Inhalt landen mit alpha=0 in
+       der Swapchain, sind im HMD komplett unsichtbar (vs. vorher: Magenta-bg
+       + Chroma-Key, der semi-transparente Widgets nicht abbilden konnte). */
     html, body { margin: 0; padding: 0; width: 1024px; height: 768px; overflow: hidden;
-                 background: #050510; font-family: sans-serif; color: #fff; }
+                 background: rgba(0,0,0,0); font-family: sans-serif; color: #fff; }
     .panel { position: absolute; box-sizing: border-box; overflow: hidden;
-             background: #101018; }
-    .panel iframe { width: 100%; height: 100%; border: 0; display: block; }
+             background: transparent; }
+    .panel iframe { width: 100%; height: 100%; border: 0; display: block;
+                    background: transparent; }
 
     /* Static atlas packing — these rects MUST match ATLAS_REGIONS in main.ts.
        The layer's QuadSlot.rectXYWH points at exactly these regions. Classes

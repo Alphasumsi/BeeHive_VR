@@ -19,6 +19,9 @@
 #include <array>
 #include <cstring>
 #include <cmath>
+#include <d3dcompiler.h>
+
+#pragma comment(lib, "d3dcompiler.lib")
 
 namespace openxr_api_layer {
 
@@ -29,6 +32,91 @@ namespace openxr_api_layer {
     const std::vector<std::string> implicitExtensions = {};
 
     // Poses live in QuadSlot now — driven by Electron, see app/src/main.ts.
+
+    // ---------------------------------------------------------------------
+    // C4 Chroma-Key Compute Shader.
+    //
+    // Atlas-Renderer (Electron) malt überall wo kein Widget-Pixel liegt pures
+    // Magenta (#FF00FF). Dieser Shader scannt jeden Pixel: Magenta → alpha=0
+    // (komplett transparent, RGB auch 0 damit der OpenXR-Compositor bei pre-
+    // multiplied Blending nicht durchschimmert), alles andere → pre-multiplied
+    // Alpha mit dem Per-Quad-Opacity-Multiplier (B10).
+    //
+    // sRGB-Behandlung: WGC-Source ist R8G8B8A8_UNORM (raw sRGB-encoded Bytes von
+    // Chromium). Intermediate-Tex ist UAV-bindbar UNORM. Wir SCHREIBEN die
+    // sRGB-encoded Werte 1:1 raus — anschließendes CopyResource auf das
+    // UNORM_SRGB-Swapchain-Image (C5) reinterpretiert die Bytes als sRGB,
+    // OpenXR-Runtime decoded zu linear für sauberes Blending. Würden wir hier
+    // sRGB→Linear konvertieren, würde die Runtime nochmal decoden → doppelter
+    // Gamma-Pop. Opacity-Multiplikation läuft in sRGB-Space — strictly gamma-
+    // inkorrekt, aber matched die Pre-C5-Pipeline-Optik (CopyResource skaliert
+    // auch nicht).
+    //
+    // HighlightOn/BorderPx/HighlightColor sind für B5 (Place-in-VR cyan/grün
+    // Rahmen) vorbereitet; heute kommt die CB mit HighlightOn=0 rein.
+    constexpr const char* kChromaKeyHlsl = R"HLSL(
+cbuffer config : register(b0) {
+    float3 TransparentColor;   // (1,0,1) für Magenta
+    float  Opacity;             // 0..1, pre-multiplied auf RGB+A
+    uint   RectX;
+    uint   RectY;
+    uint   RectW;
+    uint   RectH;
+    float  HighlightOn;         // 0=aus, 1=Border zeichnen (B5)
+    float  BorderPx;            // Rahmenstärke in Pixeln
+    float  _pad0;
+    float  _pad_align;
+    float3 HighlightColor;      // RGB des B5-Rahmens
+    float  _pad1;
+};
+Texture2D in_texture : register(t0);
+RWTexture2D<float4> out_texture : register(u0);
+
+[numthreads(8, 8, 1)]
+void main(uint2 tid : SV_DispatchThreadID)
+{
+    if (tid.x >= RectW || tid.y >= RectH) return;
+    uint2 pos = uint2(RectX + tid.x, RectY + tid.y);
+
+    if (HighlightOn > 0.5) {
+        uint bx = (uint)BorderPx;
+        if (tid.x < bx || tid.y < bx ||
+            tid.x >= RectW - bx || tid.y >= RectH - bx) {
+            out_texture[pos] = float4(HighlightColor, 1.0);
+            return;
+        }
+    }
+
+    // C4 Alpha-Pfad (4.6.2026): WGC liefert von einer transparent:true
+    // BrowserWindow eine Surface mit nativem Alpha-Kanal. Chromium gibt
+    // pre-multiplied alpha aus — wir multiplizieren nur noch den User-
+    // Opacity-Slider drauf.
+    //
+    // Wenn der Pfad nicht klappt (WGC liefert immer noch opake Bytes oder
+    // schwarzen Frame), siehst du das im HMD: alle Pixel hängen — dann
+    // zurück auf Chroma-Key (siehe git history: soft chroma + un-mix).
+    float4 src = in_texture[pos];
+    out_texture[pos] = float4(src.rgb * Opacity, src.a * Opacity);
+}
+)HLSL";
+
+    // Spiegel der HLSL-cbuffer-Struktur. HLSL packt cbuffers in 16-Byte-Rows
+    // — Reihenfolge im C++ muss 1:1 dem Shader entsprechen.
+    struct ChromaConstants {
+        float    transparentColor[3];   // 12     ┐ row 0
+        float    opacity;                //  4    ┘
+        uint32_t rectX;                  //  4    ┐
+        uint32_t rectY;                  //  4    │ row 1
+        uint32_t rectW;                  //  4    │
+        uint32_t rectH;                  //  4    ┘
+        float    highlightOn;            //  4    ┐
+        float    borderPx;               //  4    │ row 2
+        float    pad0;                   //  4    │
+        float    padAlign;               //  4    ┘
+        float    highlightColor[3];      // 12    ┐ row 3
+        float    pad1;                   //  4    ┘
+    };
+    static_assert(sizeof(ChromaConstants) == 64, "ChromaConstants must be 64 bytes (4 × 16B HLSL rows)");
 
     class OpenXrLayer : public openxr_api_layer::OpenXrApi {
       public:
@@ -217,7 +305,7 @@ namespace openxr_api_layer {
             float    quatX, quatY, quatZ, quatW;
             float    sizeW, sizeH;
             uint32_t visible;
-            uint32_t reserved;
+            float    opacity;     // 0..1, default 1.0. War `reserved` bis C4.
         };
         static_assert(sizeof(QuadSlot) == 76, "QuadSlot must be exactly 76 bytes");
 
@@ -379,7 +467,80 @@ namespace openxr_api_layer {
             Log(fmt::format("setup: swapchain {}x{} sourceFmt={} swapFmt={} imageCount={} — quad live\n",
                             m_texWidth, m_texHeight, (int)m_texFormat, (int)swapFormat, imageCount));
             m_swapchainReady = true;
+
+            // (g) Chroma-Key Compute-Pipeline bauen. Fehler hier sind nicht fatal —
+            //     m_chromaReady=false fällt im Per-Frame-Path zurück auf CopyResource
+            //     (alte Pipeline, kein Chroma-Key, dafür sicher passierbarer Magenta-bg).
+            SetupChromaPipeline();
             return true;
+        }
+
+        // C4: Compute-Shader + Intermediate-UAV-Textur einmalig bauen.
+        // Source-SRV wird lazy pro Frame gecached (Pointer wechselt mit WGC).
+        void SetupChromaPipeline() {
+            ComPtr<ID3DBlob> shaderBlob, errorBlob;
+            HRESULT hr = D3DCompile(
+                kChromaKeyHlsl, std::strlen(kChromaKeyHlsl),
+                "chroma_key.hlsl", nullptr, nullptr,
+                "main", "cs_5_0",
+                D3DCOMPILE_OPTIMIZATION_LEVEL3, 0,
+                &shaderBlob, &errorBlob);
+            if (FAILED(hr)) {
+                const char* msg = errorBlob ? (const char*)errorBlob->GetBufferPointer() : "(no error blob)";
+                Log(fmt::format("chroma: D3DCompile failed hr=0x{:08x}: {}\n", (uint32_t)hr, msg));
+                return;
+            }
+            hr = m_appDevice->CreateComputeShader(
+                shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(),
+                nullptr, &m_chromaShader);
+            if (FAILED(hr)) {
+                Log(fmt::format("chroma: CreateComputeShader failed hr=0x{:08x}\n", (uint32_t)hr));
+                return;
+            }
+
+            // Constant Buffer — DYNAMIC + WRITE_DISCARD damit wir pro Quad
+            // ohne Stall neu reinschreiben können.
+            D3D11_BUFFER_DESC cbd{};
+            cbd.ByteWidth      = sizeof(ChromaConstants);
+            cbd.Usage          = D3D11_USAGE_DYNAMIC;
+            cbd.BindFlags      = D3D11_BIND_CONSTANT_BUFFER;
+            cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+            hr = m_appDevice->CreateBuffer(&cbd, nullptr, &m_chromaCB);
+            if (FAILED(hr)) {
+                Log(fmt::format("chroma: CreateBuffer (CB) failed hr=0x{:08x}\n", (uint32_t)hr));
+                return;
+            }
+
+            // Intermediate-Textur: gleicher Pixel-Inhalt wie Swapchain-Image,
+            // aber explizit als R8G8B8A8_UNORM angelegt damit wir eine UAV
+            // drauf binden können (UNORM_SRGB-UAV ist nicht supported).
+            // CopyResource zur UNORM_SRGB-Swapchain ist legal (TYPELESS-Familie).
+            D3D11_TEXTURE2D_DESC td{};
+            td.Width            = m_texWidth;
+            td.Height           = m_texHeight;
+            td.MipLevels        = 1;
+            td.ArraySize        = 1;
+            td.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
+            td.SampleDesc.Count = 1;
+            td.Usage            = D3D11_USAGE_DEFAULT;
+            td.BindFlags        = D3D11_BIND_UNORDERED_ACCESS;
+            hr = m_appDevice->CreateTexture2D(&td, nullptr, &m_intermediateTex);
+            if (FAILED(hr)) {
+                Log(fmt::format("chroma: CreateTexture2D (intermediate) failed hr=0x{:08x}\n", (uint32_t)hr));
+                return;
+            }
+            D3D11_UNORDERED_ACCESS_VIEW_DESC uavd{};
+            uavd.Format        = DXGI_FORMAT_R8G8B8A8_UNORM;
+            uavd.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+            hr = m_appDevice->CreateUnorderedAccessView(m_intermediateTex.Get(), &uavd, &m_intermediateUAV);
+            if (FAILED(hr)) {
+                Log(fmt::format("chroma: CreateUnorderedAccessView failed hr=0x{:08x}\n", (uint32_t)hr));
+                return;
+            }
+
+            m_chromaReady = true;
+            Log(fmt::format("chroma: pipeline ready ({}x{} intermediate UNORM, CS compiled)\n",
+                            m_texWidth, m_texHeight));
         }
 
         // Returns the latest WGC-captured surface, or nullptr if the pool has
@@ -431,6 +592,16 @@ namespace openxr_api_layer {
             m_loggedAwaitingFrame = false;
             m_loggedHoldoff = false;
             m_loggedFirstQuads = false;
+            // Chroma-Pipeline (C4): ComPtrs lassen die D3D-Objekte beim Reset
+            // sauber los — m_chromaSourceCachedPtr ist raw, nur als Cache-Key.
+            m_chromaShader.Reset();
+            m_chromaCB.Reset();
+            m_intermediateTex.Reset();
+            m_intermediateUAV.Reset();
+            m_chromaSourceSRV.Reset();
+            m_chromaSourceCachedPtr = nullptr;
+            m_chromaReady = false;
+            m_loggedChromaError = false;
         }
 
         // ---------- Place-in-VR ------------------------------------------------
@@ -604,8 +775,10 @@ namespace openxr_api_layer {
 
                 const bool kCtrl  = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
                 const bool kShift = (GetAsyncKeyState(VK_SHIFT)   & 0x8000) != 0;
+                const bool kAlt   = (GetAsyncKeyState(VK_MENU)    & 0x8000) != 0;
                 int mod = -1;                   // XY
                 if (kCtrl && kShift) mod = 3;   // Yaw/Pitch (wrist)
+                else if (kAlt)       mod = 2;   // Opacity (B10, ALT)
                 else if (kCtrl)      mod = 0;   // Z
                 else if (kShift)     mod = 1;   // Scale
 
@@ -624,6 +797,7 @@ namespace openxr_api_layer {
                     m_dragSizeHRef = m_dragSizeH;
                     m_dragYawRef   = m_dragYawDeg;
                     m_dragPitchRef = m_dragPitchDeg;
+                    m_dragOpacityRef = m_dragOpacity;
                 }
 
                 constexpr float K_SCALE = 1.5f;             // multiplicative per meter forward
@@ -643,9 +817,20 @@ namespace openxr_api_layer {
                     m_dragSizeH = std::clamp(m_dragSizeHRef * factor, 0.02f, 5.f);
                     break;
                 }
+                case 2: {
+                    // ALT = Opacity. Hand vorwärts (Quad-Richtung) → mehr deckend,
+                    // rückwärts → transparenter. K ist linear pro Meter, kann später
+                    // getunt werden falls zu sensibel / zu lasch.
+                    constexpr float K_OPACITY = 1.0f;
+                    m_dragOpacity = std::clamp(m_dragOpacityRef + fwd * K_OPACITY, 0.f, 1.f);
+                    break;
+                }
                 case 3:
                     m_dragYawDeg   = m_dragYawRef   + (curYaw   - m_ctrlYawRef);
-                    m_dragPitchDeg = m_dragPitchRef + (curPitch - m_ctrlPitchRef);
+                    // Tilt invertiert (User 4.6.2026): nach unten kippen am
+                    // Controller = Quad-Pitch nach oben statt nach unten. Gefühlt
+                    // intuitiver für „Overlay zu mir kippen".
+                    m_dragPitchDeg = m_dragPitchRef - (curPitch - m_ctrlPitchRef);
                     QuatFromYawPitchDeg(m_dragYawDeg, m_dragPitchDeg,
                                         m_dragQuatX, m_dragQuatY, m_dragQuatZ, m_dragQuatW);
                     break;
@@ -683,6 +868,7 @@ namespace openxr_api_layer {
             m_dragSizeW = s.sizeW; m_dragSizeH = s.sizeH;
             m_dragQuatX = s.quatX; m_dragQuatY = s.quatY;
             m_dragQuatZ = s.quatZ; m_dragQuatW = s.quatW;
+            m_dragOpacity = s.opacity;
             QuatToYawPitchDeg({s.quatX, s.quatY, s.quatZ, s.quatW},
                               m_dragYawDeg, m_dragPitchDeg);
             char idLog[17] = {}; std::memcpy(idLog, m_grabTargetId, 16);
@@ -701,8 +887,11 @@ namespace openxr_api_layer {
             ++m_placeOutGen;
             std::memcpy(p + 0,  &m_placeOutGen, 8);
             std::memcpy(p + 8,  m_grabTargetId, 16);
-            float f[7] = { m_dragPosX, m_dragPosY, m_dragPosZ,
-                           m_dragYawDeg, m_dragPitchDeg, m_dragSizeW, m_dragSizeH };
+            // 8 floats — Opacity (B10 ALT-Drag) am Ende. Buffer ist 96 Byte,
+            // 24 + 8*4 = 56 verbraucht, 40 Padding bleibt.
+            float f[8] = { m_dragPosX, m_dragPosY, m_dragPosZ,
+                           m_dragYawDeg, m_dragPitchDeg, m_dragSizeW, m_dragSizeH,
+                           m_dragOpacity };
             std::memcpy(p + 24, f, sizeof(f));
         }
 
@@ -764,8 +953,89 @@ namespace openxr_api_layer {
             }
 
             ID3D11Texture2D* dst = m_swapchainTextures[imageIndex];
-            m_appContext->CopyResource(dst, sourceTex);
 
+            if (m_chromaReady) {
+                // C4 Chroma-Key + B10 Opacity: pro sichtbarem Quad ein Dispatch
+                // über seinen Sub-Rect ins Intermediate, danach einmal Copy ins
+                // SRGB-Swapchain-Image. Source-SRV nach Pointer cachen (WGC
+                // rotiert die Surfaces im Frame-Pool).
+                if (sourceTex != m_chromaSourceCachedPtr) {
+                    m_chromaSourceSRV.Reset();
+                    D3D11_SHADER_RESOURCE_VIEW_DESC srvd{};
+                    srvd.Format              = DXGI_FORMAT_R8G8B8A8_UNORM;
+                    srvd.ViewDimension       = D3D11_SRV_DIMENSION_TEXTURE2D;
+                    srvd.Texture2D.MipLevels = 1;
+                    const HRESULT hrSrv = m_appDevice->CreateShaderResourceView(
+                        sourceTex, &srvd, &m_chromaSourceSRV);
+                    if (FAILED(hrSrv)) {
+                        if (!m_loggedChromaError) {
+                            Log(fmt::format("chroma: CreateShaderResourceView (WGC src) hr=0x{:08x}\n",
+                                            (uint32_t)hrSrv));
+                            m_loggedChromaError = true;
+                        }
+                        // Fallback auf CopyResource — wenigstens Bild im VR (mit Magenta).
+                        m_appContext->CopyResource(dst, sourceTex);
+                        goto release_swapchain_image;
+                    }
+                    m_chromaSourceCachedPtr = sourceTex;
+                }
+
+                ID3D11ShaderResourceView* srvs[] = { m_chromaSourceSRV.Get() };
+                ID3D11UnorderedAccessView* uavs[] = { m_intermediateUAV.Get() };
+                ID3D11Buffer* cbs[] = { m_chromaCB.Get() };
+                m_appContext->CSSetShader(m_chromaShader.Get(), nullptr, 0);
+                m_appContext->CSSetShaderResources(0, 1, srvs);
+                m_appContext->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+                m_appContext->CSSetConstantBuffers(0, 1, cbs);
+
+                for (uint32_t i = 0; i < requested; ++i) {
+                    const QuadSlot& s = slots[i];
+                    if (!s.visible) continue;
+                    if (s.rectW == 0 || s.rectH == 0) continue;
+
+                    D3D11_MAPPED_SUBRESOURCE mapped{};
+                    if (FAILED(m_appContext->Map(m_chromaCB.Get(), 0,
+                                                  D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+                        continue;
+                    }
+                    ChromaConstants* cb = (ChromaConstants*)mapped.pData;
+                    cb->transparentColor[0] = 1.0f;
+                    cb->transparentColor[1] = 0.0f;
+                    cb->transparentColor[2] = 1.0f;
+                    cb->opacity        = s.opacity;
+                    cb->rectX          = s.rectX;
+                    cb->rectY          = s.rectY;
+                    cb->rectW          = s.rectW;
+                    cb->rectH          = s.rectH;
+                    cb->highlightOn    = 0.0f;     // B5 später
+                    cb->borderPx       = 0.0f;
+                    cb->pad0           = 0.0f;
+                    cb->padAlign       = 0.0f;
+                    cb->highlightColor[0] = 0.0f;
+                    cb->highlightColor[1] = 0.0f;
+                    cb->highlightColor[2] = 0.0f;
+                    cb->pad1           = 0.0f;
+                    m_appContext->Unmap(m_chromaCB.Get(), 0);
+
+                    m_appContext->Dispatch((s.rectW + 7) / 8, (s.rectH + 7) / 8, 1);
+                }
+
+                // Pipeline aufräumen — SRV/UAV bleiben sonst gebunden und können
+                // bei späteren Render-Operationen Konflikte werfen.
+                ID3D11ShaderResourceView* nullSRV[] = { nullptr };
+                ID3D11UnorderedAccessView* nullUAV[] = { nullptr };
+                m_appContext->CSSetShaderResources(0, 1, nullSRV);
+                m_appContext->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
+                m_appContext->CSSetShader(nullptr, nullptr, 0);
+
+                m_appContext->CopyResource(dst, m_intermediateTex.Get());
+            } else {
+                // Fallback (Chroma-Setup hat nicht geklappt): wie vor C4 —
+                // Bild kommt durch, aber mit Magenta-Bereichen.
+                m_appContext->CopyResource(dst, sourceTex);
+            }
+
+        release_swapchain_image:
             XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
             xr = OpenXrApi::xrReleaseSwapchainImage(m_swapchain, &ri);
             if (XR_FAILED(xr)) {
@@ -787,6 +1057,7 @@ namespace openxr_api_layer {
                     s.quatX = m_dragQuatX; s.quatY = m_dragQuatY;
                     s.quatZ = m_dragQuatZ; s.quatW = m_dragQuatW;
                     s.sizeW = m_dragSizeW; s.sizeH = m_dragSizeH;
+                    s.opacity = m_dragOpacity;  // live ALT-Drag (B10)
                 }
                 XrCompositionLayerQuad& q = outQuads[written++];
                 q.type = XR_TYPE_COMPOSITION_LAYER_QUAD;
@@ -865,6 +1136,8 @@ namespace openxr_api_layer {
         float       m_dragYawDeg{0.f}, m_dragPitchDeg{0.f};
         float       m_dragYawRef{0.f}, m_dragPitchRef{0.f};
         float       m_dragQuatX{0.f}, m_dragQuatY{0.f}, m_dragQuatZ{0.f}, m_dragQuatW{1.f};
+        // B10 ALT-Opacity Drag-State.
+        float       m_dragOpacity{1.f}, m_dragOpacityRef{1.f};
 
         // PlaceOut shared-memory section (layer → Electron). 96 bytes.
         HANDLE      m_placeOutMapping{nullptr};
@@ -883,6 +1156,26 @@ namespace openxr_api_layer {
         XrSpace m_localSpace{XR_NULL_HANDLE};
         XrSwapchain m_swapchain{XR_NULL_HANDLE};
         std::vector<ID3D11Texture2D*> m_swapchainTextures; // runtime-owned
+
+        // C4 Chroma-Key Compute-Pipeline:
+        //   WGC-Source (UNORM, sRGB-encoded Bytes)
+        //     → Compute-Shader (Per-Quad Magenta-Key + Opacity)
+        //     → Intermediate-Tex (UNORM, UAV-bindbar)
+        //     → CopyResource zur Swapchain (UNORM_SRGB, gleiche TYPELESS-Familie)
+        //
+        // Intermediate-Tex weil UAVs auf UNORM_SRGB nicht supported sind —
+        // Compute schreibt UNORM, Swapchain interpretiert die Bytes als sRGB.
+        ComPtr<ID3D11ComputeShader>        m_chromaShader;
+        ComPtr<ID3D11Buffer>               m_chromaCB;
+        ComPtr<ID3D11Texture2D>            m_intermediateTex;
+        ComPtr<ID3D11UnorderedAccessView>  m_intermediateUAV;
+        // SRV auf die WGC-Source-Textur. WGC rotiert die Surface-Pointer
+        // (Frame-Pool), wir cachen die letzte SRV per Pointer und rebauen
+        // nur bei Wechsel — spart pro Frame eine CreateShaderResourceView.
+        ComPtr<ID3D11ShaderResourceView>   m_chromaSourceSRV;
+        ID3D11Texture2D*                   m_chromaSourceCachedPtr{nullptr};
+        bool                               m_chromaReady{false};
+        bool                               m_loggedChromaError{false};
     };
 
     OpenXrApi* GetInstance() {

@@ -190,6 +190,7 @@ function applyWpfLayout(quads: AtlasQuadFromWpf[]): void {
     slot.quatX = q.quatX; slot.quatY = q.quatY; slot.quatZ = q.quatZ; slot.quatW = q.quatW;
     slot.sizeW = q.sizeW; slot.sizeH = q.sizeH;
     slot.visible = q.visible;
+    slot.opacity = q.opacity ?? 1.0;
     if (q.target) slotTargetById.set(q.id, q.target);
   }
   console.log(`[main] WPF layout applied: ${quads.length} quad(s), live=${currentLayout.length}`);
@@ -242,6 +243,11 @@ function createCapturedWindow() {
   const win = new BrowserWindow({
     width: ATLAS_WIDTH,
     height: ATLAS_HEIGHT,
+    // C4 Diagnose-Schritt (4.6.2026): erstmal ON-SCREEN sichtbar testen.
+    // Off-screen (-9999) lieferte alpha=0 ins HMD — Verdacht: Chromium
+    // suppressed Paint bei off-screen Fenstern. On-screen schließt das aus
+    // und beweist ob transparent:true selbst funktioniert. Hide-Strategie
+    // kommt im nächsten Schritt (Cloak alleine, WS_EX_LAYERED, o.ä.).
     x: 100,
     y: 100,
     show: true,
@@ -253,20 +259,18 @@ function createCapturedWindow() {
     frame: false,
     useContentSize: true,
     title: 'BeeHive_VR Atlas (WGC source)',
-    // C4 Transparenz: zurückgerollt am 2.6.2026 spät — transparent: true +
-    // Cloak + WGC unter Win11 lieferte ein komplett schwarzes Atlas-Bild.
-    // Plan B (Magenta-Chroma-Key-Pixel-Shader im Layer, wie alt Honey)
-    // bleibt offen. Bis dahin: opaker Atlas-bg, Track-Map ist ein dunkles
-    // Rechteck statt nur Streckenlinie.
-    transparent: false,
+    // C4 Alpha-Pfad: transparent BrowserWindow + transparent body bg.
+    // Compute-Shader im Layer schleift Alpha 1:1 durch (kein Chroma-Key mehr).
+    transparent: true,
+    backgroundColor: '#00000000',
     webPreferences: {
       backgroundThrottling: false,
     },
   });
   atlasWindow = win;
   // ⚠ Temporärer Debug-Hebel (3.6.2026): DevTools öffnen wenn env-var gesetzt.
-  // Atlas-Window selbst ist gecloakt, DevTools-Fenster ist sichtbar →
-  // erlaubt Console + Network + DOM-Inspection ohne den Cloak zu touchen.
+  // Atlas-Window selbst ist off-screen (Alpha-Pfad), DevTools-Fenster ist sichtbar →
+  // erlaubt Console + Network + DOM-Inspection.
   // Aktivieren mit: $env:BEEHIVE_ATLAS_DEVTOOLS = "1" vor App-Start.
   if (process.env.BEEHIVE_ATLAS_DEVTOOLS) {
     win.webContents.openDevTools({ mode: 'detach' });
@@ -290,6 +294,11 @@ function createCapturedWindow() {
     }
     currentHwnd = buf.readBigUInt64LE(0);
     console.log(`[main] HWND=0x${currentHwnd.toString(16)} — publishing for layer`);
+    // C4 Alpha-Pfad Schritt 2: Cloak + WS_EX_TOOLWINDOW wieder rein. Der
+    // 2.6.-Black-Screen-Bug mit Cloak+transparent ist mit aktuellem Setup
+    // neu zu prüfen — viele Variablen seither geändert (Atlas-Auto-Start,
+    // syncIframes, URL-Mapping, Compute-Shader-Setup). Wenn's wieder
+    // schwarz wird, weichen wir auf WS_EX_TOOLWINDOW alleine aus.
     try {
       applyCloakingAndToolWindow(currentHwnd);
     } catch (e) {
@@ -341,7 +350,10 @@ app.whenReady().then(() => {
       yaw:     u.yawDeg,
       pitch:   u.pitchDeg,
       scale:   u.sizeW,
-      opacity: 0,
+      // B10: Layer carried opacity jetzt in PlaceOut (ALT-Drag schreibt
+      // m_dragOpacity). WPF EngineLink-Parser FOpt erkennt das Feld und
+      // setzt src.Opacity → Slider folgt live.
+      opacity: u.opacity,
     });
   });
   placeOut.start();
