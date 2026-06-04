@@ -722,9 +722,16 @@ public partial class MainViewModel : ObservableObject
     // Atlas-Rect-Vergabe ist Electron-Sache (dynamischer Packer in
     // app/src/main.ts). WPF schickt die echte Source-Id durch — damit kommt
     // placeUpdate vom Layer mit derselben Id zurück und FindLiveSourceById
-    // greift. Sources werden hart auf die Atlas-Größe gedeckelt (Electron
-    // hat heute 3 freie Regions).
-    private const int AtlasSlotsAvailable = 3;
+    // greift. Cap = Layer-kMaxQuads (C3b, 4.6.2026: von 3 auf 8 gelüftet
+    // nachdem Electron dynamisch packt + Atlas-Window per setSize wächst).
+    private const int AtlasSlotsAvailable = 8;
+
+    // Default-Pixel-Größe pro Quad wenn der User noch keine PixelW/H gesetzt
+    // hat (SourceModel.PixelWidth=0). 512×384 ist der bisherige p1/p2-Slot —
+    // mit der alten Static-Packer-Konstanten identisch, damit User-Layouts
+    // die vor C3b angelegt wurden ohne Setup-Bruch weiterlaufen.
+    private const int DefaultRectW = 512;
+    private const int DefaultRectH = 384;
 
     private static IEnumerable<AtlasQuadDto> BuildAtlasQuads(IEnumerable<SourceModel> sources)
     {
@@ -755,6 +762,11 @@ public partial class MainViewModel : ObservableObject
                 Target  = string.IsNullOrEmpty(s.Target) ? null : s.Target,
                 // C4: Opacity-Slider treibt RGB+Alpha-Multiplier im Layer-Compute-Shader.
                 Opacity = s.Opacity,
+                // C3b: Wunsch-Pixelgröße fürs Atlas-Packing. 0 = kein User-Wert →
+                // Electron nimmt seinen Default. Sonst exakt das was auch die
+                // Preview im browser-host nutzt, damit HMD-Render scharf ist.
+                RectW   = s.PixelWidth  > 0 ? s.PixelWidth  : DefaultRectW,
+                RectH   = s.PixelHeight > 0 ? s.PixelHeight : DefaultRectH,
             };
         }
     }

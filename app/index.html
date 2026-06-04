@@ -10,35 +10,23 @@
        eh keinen eigenen bg → Pixel ohne Widget-Inhalt landen mit alpha=0 in
        der Swapchain, sind im HMD komplett unsichtbar (vs. vorher: Magenta-bg
        + Chroma-Key, der semi-transparente Widgets nicht abbilden konnte). */
-    html, body { margin: 0; padding: 0; width: 1024px; height: 768px; overflow: hidden;
+    /* C3b (4.6.2026): html/body groesse wird per setSize aus main.ts gesteuert;
+       100 % laesst body mitwachsen. Iframes werden zur Laufzeit per
+       executeJavaScript in #atlas-root injiziert. */
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
                  background: rgba(0,0,0,0); font-family: sans-serif; color: #fff; }
     .panel { position: absolute; box-sizing: border-box; overflow: hidden;
              background: transparent; }
     .panel iframe { width: 100%; height: 100%; border: 0; display: block;
                     background: transparent; }
-
-    /* Static atlas packing — these rects MUST match ATLAS_REGIONS in main.ts.
-       The layer's QuadSlot.rectXYWH points at exactly these regions. Classes
-       (not IDs) so the iframe inside can own id="pN" — that's what main.ts'
-       syncIframes() looks up to assign target URLs. */
-    .panel-1 { left:   0;   top:   0;   width: 512px;  height: 384px; }
-    .panel-2 { left: 512px; top:   0;   width: 512px;  height: 384px; }
-    .panel-3 { left:   0;   top: 384px; width: 1024px; height: 384px; }
   </style>
 </head>
 <body>
-  <!-- Real dashies — the WPF process serves them on port 8723 via
-       IrdashiesAdapterService. If WPF is not running yet, the iframes
-       stay blank (the .fallback label peeks through). -->
-  <div class="panel panel-1">
-    <iframe id="p1" src="about:blank"></iframe>
-  </div>
-  <div class="panel panel-2">
-    <iframe id="p2" src="about:blank"></iframe>
-  </div>
-  <div class="panel panel-3">
-    <iframe id="p3" src="about:blank"></iframe>
-  </div>
+  <!-- Quads kommen dynamisch rein. main.ts/syncIframes ruft executeJavaScript
+       und legt pro aktivem Source einen .panel-Container mit innerem iframe in
+       #atlas-root an; Layout-Wechsel removed Container fuer nicht mehr aktive
+       Quads. Statische Panels gab's bis f680beb — siehe project_handover_c3b. -->
+  <div id="atlas-root"></div>
 
   <script type="module" src="/src/renderer.ts"></script>
 </body>

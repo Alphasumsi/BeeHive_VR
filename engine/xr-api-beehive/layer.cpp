@@ -243,6 +243,24 @@ void main(uint2 tid : SV_DispatchThreadID)
 
                 ID3D11Texture2D* currentTex = GetCurrentTexture();
                 if (currentTex) {
+                    // C3b (4.6.2026): Atlas-BrowserWindow wächst dynamisch wenn
+                    // WPF mehr/größere Sources schickt. WGC's CaptureWindowWinRT
+                    // recreated den FramePool intern (siehe utils/capture.h), wir
+                    // müssen die OpenXR-Swapchain + Chroma-Intermediate-Tex an die
+                    // neue Quell-Größe anpassen. Surface-Pointer-Wechsel allein
+                    // (Frame-Pool-Rotation) ist HARMLOS — der Pfad weiter unten
+                    // cached den SRV per Pointer und baut nur bei Wechsel neu.
+                    D3D11_TEXTURE2D_DESC desc{};
+                    currentTex->GetDesc(&desc);
+                    if (desc.Width != m_texWidth || desc.Height != m_texHeight) {
+                        Log(fmt::format("xrEndFrame: WGC source resized {}x{} -> {}x{}, rebuilding swapchain\n",
+                                        m_texWidth, m_texHeight, desc.Width, desc.Height));
+                        if (!RebuildSwapchainForNewSize(desc.Width, desc.Height)) {
+                            currentTex = nullptr;   // skip this frame, retry next
+                        }
+                    }
+                }
+                if (currentTex) {
                     const uint32_t n = RenderAtlasQuads(currentTex, quadStorage.data());
                     for (uint32_t i = 0; i < n; ++i) {
                         layers.push_back(
@@ -541,6 +559,89 @@ void main(uint2 tid : SV_DispatchThreadID)
             m_chromaReady = true;
             Log(fmt::format("chroma: pipeline ready ({}x{} intermediate UNORM, CS compiled)\n",
                             m_texWidth, m_texHeight));
+        }
+
+        // C3b (4.6.2026): partieller Rebuild bei WGC-Source-Resize. Reuse Shader
+        // + CB (sind size-unabhängig); werfe nur Swapchain und Intermediate-Tex
+        // weg und allokiere neu. Wird aus xrEndFrame gerufen wenn der WGC-Surface
+        // descriptor eine neue Größe meldet. Bei Misserfolg bleibt m_swapchainReady
+        // formal true (kein kompletter Setup-Reset) — der nächste Frame ohne
+        // gültige Swapchain läuft einfach durch, kein Crash.
+        bool RebuildSwapchainForNewSize(uint32_t newW, uint32_t newH) {
+            if (m_swapchain != XR_NULL_HANDLE) {
+                OpenXrApi::xrDestroySwapchain(m_swapchain);
+                m_swapchain = XR_NULL_HANDLE;
+            }
+            m_swapchainTextures.clear();
+            m_texWidth  = newW;
+            m_texHeight = newH;
+
+            DXGI_FORMAT swapFormat = m_texFormat;
+            if (m_texFormat == DXGI_FORMAT_R8G8B8A8_UNORM)
+                swapFormat = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
+            else if (m_texFormat == DXGI_FORMAT_B8G8R8A8_UNORM)
+                swapFormat = DXGI_FORMAT_B8G8R8A8_UNORM_SRGB;
+
+            XrSwapchainCreateInfo sci{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+            sci.usageFlags = XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+            sci.format     = (int64_t)swapFormat;
+            sci.width      = m_texWidth;
+            sci.height     = m_texHeight;
+            sci.sampleCount = 1; sci.faceCount = 1; sci.arraySize = 1; sci.mipCount = 1;
+            XrResult xr = OpenXrApi::xrCreateSwapchain(m_session, &sci, &m_swapchain);
+            if (XR_FAILED(xr)) {
+                Log(fmt::format("resize: xrCreateSwapchain failed res={}\n", (int)xr));
+                m_swapchainReady = false;
+                return false;
+            }
+            uint32_t imageCount = 0;
+            OpenXrApi::xrEnumerateSwapchainImages(m_swapchain, 0, &imageCount, nullptr);
+            std::vector<XrSwapchainImageD3D11KHR> images(
+                imageCount, XrSwapchainImageD3D11KHR{XR_TYPE_SWAPCHAIN_IMAGE_D3D11_KHR});
+            OpenXrApi::xrEnumerateSwapchainImages(
+                m_swapchain, imageCount, &imageCount,
+                reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
+            for (auto& img : images) m_swapchainTextures.push_back(img.texture);
+
+            // Intermediate-Tex an die neue Größe anpassen. Shader+CB sind
+            // size-unabhängig und bleiben drin. UAV wird durch Reset() der Tex
+            // auch nichtig (UAV hält Tex am Leben, nicht umgekehrt) — neu bauen.
+            m_intermediateTex.Reset();
+            m_intermediateUAV.Reset();
+            D3D11_TEXTURE2D_DESC td{};
+            td.Width            = m_texWidth;
+            td.Height           = m_texHeight;
+            td.MipLevels        = 1;
+            td.ArraySize        = 1;
+            td.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
+            td.SampleDesc.Count = 1;
+            td.Usage            = D3D11_USAGE_DEFAULT;
+            td.BindFlags        = D3D11_BIND_UNORDERED_ACCESS;
+            HRESULT hr = m_appDevice->CreateTexture2D(&td, nullptr, &m_intermediateTex);
+            if (FAILED(hr)) {
+                Log(fmt::format("resize: CreateTexture2D failed hr=0x{:08x}\n", (uint32_t)hr));
+                m_chromaReady = false;
+                return false;
+            }
+            D3D11_UNORDERED_ACCESS_VIEW_DESC uavd{};
+            uavd.Format        = DXGI_FORMAT_R8G8B8A8_UNORM;
+            uavd.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+            hr = m_appDevice->CreateUnorderedAccessView(m_intermediateTex.Get(), &uavd, &m_intermediateUAV);
+            if (FAILED(hr)) {
+                Log(fmt::format("resize: CreateUnorderedAccessView failed hr=0x{:08x}\n", (uint32_t)hr));
+                m_chromaReady = false;
+                return false;
+            }
+
+            // SRV-Cache invalidieren — der FramePool.Recreate() gibt vermutlich
+            // andere Texture-Pointer raus, RenderAtlasQuads würde sonst weiter
+            // den alten Cache-Key matchen und SRV nicht neu bauen.
+            m_chromaSourceSRV.Reset();
+            m_chromaSourceCachedPtr = nullptr;
+
+            Log(fmt::format("resize: swapchain + intermediate rebuilt {}x{}\n",
+                            m_texWidth, m_texHeight));
+            return true;
         }
 
         // Returns the latest WGC-captured surface, or nullptr if the pool has

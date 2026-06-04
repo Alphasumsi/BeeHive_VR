@@ -49,6 +49,17 @@ public sealed class AtlasQuadDto
     /// Default 1.0 = voll deckend. Getrieben vom LayoutPage-Opacity-Slider.
     /// </summary>
     [JsonPropertyName("opacity")] public float Opacity { get; set; } = 1.0f;
+
+    /// <summary>
+    /// Wunsch-Pixel-Größe des Widgets im Atlas (C3b, 4.6.2026). WPF liefert
+    /// hier die vom User in der Layout-Page eingestellte PixelW/H (= das was
+    /// die Preview im browser-host.exe nutzt). Electron-Packer bekommt den
+    /// Wunsch, sucht einen passenden Slot im Atlas, schreibt die Ist-Position
+    /// (rectX/Y/W/H) ins SHM-QuadSlot — der Layer sieht nur das fertige Rect.
+    /// 0 = Default (Electron entscheidet, heute 512×384).
+    /// </summary>
+    [JsonPropertyName("rectW")]   public int RectW { get; set; }
+    [JsonPropertyName("rectH")]   public int RectH { get; set; }
 }
 
 public sealed class EngineSourceStatus

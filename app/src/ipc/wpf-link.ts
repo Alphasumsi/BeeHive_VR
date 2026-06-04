@@ -35,6 +35,11 @@ export interface AtlasQuadFromWpf {
   // 0..1 Multiplier auf RGB+Alpha, getrieben vom LayoutPage-Opacity-Slider.
   // Default 1.0 (voll deckend). Compute-Shader im Layer wendet das pro Quad an.
   opacity?: number;
+  // C3b (4.6.2026): Wunsch-Pixel-Größe des Widgets im Atlas. Electron-Packer
+  // sucht damit einen Slot, ist authoritativ für die Ist-Position (rectX/Y) im
+  // QuadSlot. 0/undefined → Default 512×384.
+  rectW?:   number;
+  rectH?:   number;
 }
 
 class WpfLink extends EventEmitter {

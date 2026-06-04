@@ -92,39 +92,43 @@ if (!app.requestSingleInstanceLock()) {
 // The layer's swapchain format is locked to whatever we publish here.
 const ATLAS_FORMAT_DXGI = 28; // DXGI_FORMAT_R8G8B8A8_UNORM
 
-// Atlas dimensions and the static layout of sub-regions. This is the POC
-// layout — eventually the WPF UI or the user's saved layout will drive it.
-const ATLAS_WIDTH  = 1024;
-const ATLAS_HEIGHT = 768;
+// C3b (4.6.2026): Atlas-Größe ist jetzt das Output eines Packers, nicht mehr
+// statisch. Initial-Werte halten Chromium happy bis die erste setAtlasLayout-
+// Message ankommt. Layer pollt EnsureSetup bis Electron einen non-zero
+// FrameSlot publiziert hat — kein Schaden wenn wir hier mit 256×256 starten.
+let atlasWidth  = 256;
+let atlasHeight = 256;
 
-// Atlas packing — three fixed regions matching the iframe panels in
-// index.html. Electron stays authoritative for the rect side (iframe DOM is
-// Electron-owned); WPF supplies pose / size / visibility / target-URL and we
-// assign a region to each incoming id on a first-come basis. Existing
-// assignments stick (so dragging a quad in WPF doesn't re-shuffle which
-// iframe shows). iframeId koppelt eine Region an ein konkretes HTML-Iframe-
-// Element — wird gebraucht damit main.ts die richtige iframe-src dynamisch
-// auf die zur Source passende URL setzen kann.
-const ATLAS_REGIONS: { iframeId: string; rectX: number; rectY: number; rectW: number; rectH: number }[] = [
-  { iframeId: 'p1', rectX:   0, rectY:   0, rectW:  512, rectH: 384 },
-  { iframeId: 'p2', rectX: 512, rectY:   0, rectW:  512, rectH: 384 },
-  { iframeId: 'p3', rectX:   0, rectY: 384, rectW: 1024, rectH: 384 },
-];
+// Packer-Konfig: Shelf-Packing wickelt nach PACKER_MAX_WIDTH um. 2048 px ist
+// genug für 3-4 typische Widgets (~600 px) nebeneinander; bei mehr Sources
+// wachsen weitere Zeilen drunter. Limit existiert nur damit ein einzelner
+// 8000-px-Source nicht in 1 Zeile alles aufzieht — der Atlas ist kompakter
+// wenn er hochkant wachsen darf.
+const PACKER_MAX_WIDTH = 2048;
+const DEFAULT_RECT_W   = 512;
+const DEFAULT_RECT_H   = 384;
+// BrowserWindow-Mindest-Größe (Chromium mag keine 0×0).
+const MIN_ATLAS_DIM    = 16;
 
 // WPF authoritatively owns which quads exist — nothing in VR until
 // setAtlasLayout arrives with at least one entry.
 const currentLayout: QuadDesc[] = [];
 
-// Parallele Maps für die Iframe-Verdrahtung (nicht in QuadDesc, weil das den
-// Layer-Vertrag nicht ändert). slotId → iframeId bleibt stabil über das
-// Lifetime einer Source, slotId → target-URL kommt aus jedem applyWpfLayout.
-const slotIframeById = new Map<string, string>();
+// id → target-URL pro Quad. Wird in jedem applyWpfLayout aktualisiert und
+// von syncIframes() zur DOM-Konstruktion gelesen. Iframes selbst werden über
+// die Source-Id adressiert (sanitisiert für die DOM-id) — separate iframeId-
+// Map wie vor C3b ist obsolet, weil der Packer pro Re-Pack neue Slots zuweist
+// und es keinen stabilen "p1/p2/p3"-Pool mehr gibt.
 const slotTargetById = new Map<string, string>();
 
-// Snapshot der zuletzt angewandten Iframe-Zuweisungen — verhindert dass
-// jeder Place-in-VR-Frame (60 Hz Push aus WPF) einen executeJavaScript-
-// Roundtrip auslöst. URLs ändern sich nur bei Add/Remove/Source-Edit.
-let lastSyncedAssignmentsKey = '';
+// Throttle-Snapshot: was wurde zuletzt ans DOM gepusht? Verhindert dass jeder
+// Place-in-VR-Frame (60 Hz) den executeJavaScript-Roundtrip macht.
+let lastSyncedDomKey = '';
+
+// C3b: Wunsch-Pixel-Größe pro Quad-Id. Wir packen nur dann neu wenn sich
+// (Id-Set ∪ Wunsch-Größen) ändert; reine Pose-Updates (=Place-in-VR-Drag)
+// dürfen die rectX/Y/W/H NICHT anfassen, sonst stretcht der Atlas pro Frame.
+const currentRectWishById = new Map<string, { w: number; h: number }>();
 
 let currentHwnd: bigint = 0n;
 let atlasWindow: BrowserWindow | null = null;
@@ -139,11 +143,54 @@ function republish(): void {
   if (currentHwnd === 0n) return;
   const payload: FramePublish = {
     hwnd:   currentHwnd,
-    width:  ATLAS_WIDTH,
-    height: ATLAS_HEIGHT,
+    width:  atlasWidth,
+    height: atlasHeight,
     format: ATLAS_FORMAT_DXGI,
   };
   sharedFrame.publishAtlas(payload, currentLayout);
+}
+
+// Shelf-Packer (FFDH, naïv aber gut genug für ≤8 Quads): Inputs nach Höhe
+// absteigend sortieren, Zeile für Zeile von links nach rechts füllen bis
+// PACKER_MAX_WIDTH überschritten. Output ist die Region pro Id plus die
+// Atlas-Gesamtgröße. Stabile Reihenfolge nicht garantiert — irrelevant weil
+// wir per Id matchen.
+interface PackInput  { id: string; rectW: number; rectH: number; }
+interface PackOutput { id: string; rectX: number; rectY: number; rectW: number; rectH: number; }
+function packShelf(inputs: PackInput[]):
+    { rects: PackOutput[]; atlasW: number; atlasH: number } {
+  const sorted = inputs.slice().sort((a, b) => b.rectH - a.rectH);
+  const rects: PackOutput[] = [];
+  let rowY = 0, rowH = 0, cursorX = 0, maxX = 0;
+  for (const it of sorted) {
+    const w = Math.max(1, Math.floor(it.rectW));
+    const h = Math.max(1, Math.floor(it.rectH));
+    if (cursorX > 0 && cursorX + w > PACKER_MAX_WIDTH) {
+      rowY += rowH; rowH = 0; cursorX = 0;
+    }
+    rects.push({ id: it.id, rectX: cursorX, rectY: rowY, rectW: w, rectH: h });
+    cursorX += w;
+    if (h > rowH) rowH = h;
+    if (cursorX > maxX) maxX = cursorX;
+  }
+  const atlasW = Math.max(MIN_ATLAS_DIM, maxX);
+  const atlasH = Math.max(MIN_ATLAS_DIM, rowY + rowH);
+  return { rects, atlasW, atlasH };
+}
+
+// True wenn sich entweder das Id-Set oder eine der Wunsch-Größen ggü.
+// currentRectWishById geändert hat — nur dann packen wir neu (und resizen
+// das BrowserWindow). Reine Pose-Updates pro Place-in-VR-Frame nicht.
+function topologyChanged(quads: AtlasQuadFromWpf[]): boolean {
+  if (quads.length !== currentRectWishById.size) return true;
+  for (const q of quads) {
+    const want = currentRectWishById.get(q.id);
+    if (!want) return true;
+    const wantW = q.rectW && q.rectW > 0 ? q.rectW : DEFAULT_RECT_W;
+    const wantH = q.rectH && q.rectH > 0 ? q.rectH : DEFAULT_RECT_H;
+    if (want.w !== wantW || want.h !== wantH) return true;
+  }
+  return false;
 }
 
 function applyWpfLayout(quads: AtlasQuadFromWpf[]): void {
@@ -155,37 +202,54 @@ function applyWpfLayout(quads: AtlasQuadFromWpf[]): void {
                   : atlasWindow.webContents.isLoading() ? 'LOADING'
                   : 'READY';
   atlasLog(`[applyWpfLayout] win=${winState} quads=${quads.length} ${debug}`);
-  // Phase 1: keep existing entries that WPF still wants, drop ones it doesn't.
-  // Phase 2: append new ones, assigning the next free atlas region.
-  const incomingIds = new Set(quads.map(q => q.id));
-  for (let i = currentLayout.length - 1; i >= 0; i--) {
-    const removed = currentLayout[i];
-    if (!incomingIds.has(removed.id)) {
-      slotIframeById.delete(removed.id);
-      slotTargetById.delete(removed.id);
-      currentLayout.splice(i, 1);
+
+  const repack = topologyChanged(quads);
+  if (repack) {
+    // (1) Wunsch-Größen-Snapshot updaten.
+    currentRectWishById.clear();
+    for (const q of quads) {
+      currentRectWishById.set(q.id, {
+        w: q.rectW && q.rectW > 0 ? q.rectW : DEFAULT_RECT_W,
+        h: q.rectH && q.rectH > 0 ? q.rectH : DEFAULT_RECT_H,
+      });
     }
-  }
-  const usedRegions = new Set(
-    currentLayout.map(s => `${s.rectX},${s.rectY},${s.rectW},${s.rectH}`));
-  for (const q of quads) {
-    let slot = currentLayout.find(s => s.id === q.id);
-    if (!slot) {
-      const region = ATLAS_REGIONS.find(
-        r => !usedRegions.has(`${r.rectX},${r.rectY},${r.rectW},${r.rectH}`));
-      if (!region) {
-        console.warn(`[main] no free atlas region for new id "${q.id}" — dropping`);
-        continue;
-      }
-      slot = {
-        id: q.id, rectX: region.rectX, rectY: region.rectY,
-        rectW: region.rectW, rectH: region.rectH,
+    // (2) Packer aufrufen.
+    const packInputs: PackInput[] = quads.map(q => ({
+      id: q.id,
+      rectW: q.rectW && q.rectW > 0 ? q.rectW : DEFAULT_RECT_W,
+      rectH: q.rectH && q.rectH > 0 ? q.rectH : DEFAULT_RECT_H,
+    }));
+    const { rects, atlasW, atlasH } = packShelf(packInputs);
+
+    // (3) currentLayout neu aufbauen — Pose-Felder werden gleich im Phase-2-
+    // Loop unten gesetzt. Hier nur Rect + Identität.
+    currentLayout.length = 0;
+    for (const r of rects) {
+      currentLayout.push({
+        id: r.id, rectX: r.rectX, rectY: r.rectY, rectW: r.rectW, rectH: r.rectH,
         posX: 0, posY: 0, posZ: -1, sizeW: 0.4, sizeH: 0.3,
-      };
-      currentLayout.push(slot);
-      usedRegions.add(`${region.rectX},${region.rectY},${region.rectW},${region.rectH}`);
-      slotIframeById.set(q.id, region.iframeId);
+      });
     }
+
+    // (4) BrowserWindow + atlasWidth/Height auf neue Größe ziehen.
+    resizeAtlasWindow(atlasW, atlasH);
+    atlasLog(`[applyWpfLayout] repack: atlas=${atlasW}x${atlasH} regions=${rects.length}`);
+
+    // (5) URL-Map auf aktuelle Ids reduzieren — verhindert Leak alter Targets.
+    for (const id of Array.from(slotTargetById.keys())) {
+      if (!quads.some(q => q.id === id)) slotTargetById.delete(id);
+    }
+  } else {
+    // Pose-Only-Update: currentLayout in der Größe stabil, nur Pose/Vis-Felder
+    // gleich unten geupdated. Atlas-Window-Größe unverändert → kein republish-
+    // mit-neuer-Größe nötig (republish() schickt eh den aktuellen atlasWidth).
+  }
+
+  // Phase 2: in jedem Fall Pose / Quat / Size / Visibility / Opacity / Target
+  // pro Quad aus den Eingangs-DTOs in den Slot kopieren.
+  for (const q of quads) {
+    const slot = currentLayout.find(s => s.id === q.id);
+    if (!slot) continue;
     slot.posX  = q.posX;  slot.posY  = q.posY;  slot.posZ  = q.posZ;
     slot.quatX = q.quatX; slot.quatY = q.quatY; slot.quatZ = q.quatZ; slot.quatW = q.quatW;
     slot.sizeW = q.sizeW; slot.sizeH = q.sizeH;
@@ -193,44 +257,85 @@ function applyWpfLayout(quads: AtlasQuadFromWpf[]): void {
     slot.opacity = q.opacity ?? 1.0;
     if (q.target) slotTargetById.set(q.id, q.target);
   }
-  console.log(`[main] WPF layout applied: ${quads.length} quad(s), live=${currentLayout.length}`);
+
+  console.log(`[main] WPF layout applied: ${quads.length} quad(s), live=${currentLayout.length}, repack=${repack}`);
   republish();
   syncIframes();
 }
 
-// Setzt die Iframe-src jeder Atlas-Region passend zur zugewiesenen WPF-Source.
-// Iframes ohne Slot bekommen about:blank — sonst würden alte Inhalte
-// stehen bleiben, wenn der User eine Source entfernt.
-//
-// Throttle: applyWpfLayout läuft bei Place-in-VR 60+ Hz. Wenn sich die URLs
-// nicht geändert haben (Drag verändert nur Pose), brechen wir vor dem
-// executeJavaScript-IPC-Roundtrip ab — sonst stallt der Renderer.
+// Sanitiziert eine Source-Id zum DOM-id-tauglichen String (Buchstaben/Zahlen/
+// Bindestrich/Unterstrich). Source-Ids sind heute GUIDs, brauchen aber den
+// `q-`-Prefix damit sie nicht mit Ziffer anfangen.
+function sourceIdToDomId(srcId: string): string {
+  return 'q-' + srcId.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+// C3b: baut/aktualisiert die Iframe-DOM-Struktur. Pro currentLayout-Slot ein
+// .panel-Container mit absoluter Pixel-Positionierung; darin ein <iframe> mit
+// src=slotTargetById. Container die nicht mehr in currentLayout sind werden
+// entfernt. Throttled: identische DOM-Beschreibung → kein executeJavaScript.
 function syncIframes(): void {
   if (!atlasWindow || atlasWindow.isDestroyed()) return;
   if (!atlasPageReady) {
     atlasLog('[syncIframes] skipped — page not ready yet');
     return;
   }
-  const assignments: Record<string, string> = {};
-  for (const r of ATLAS_REGIONS) assignments[r.iframeId] = 'about:blank';
-  for (const slot of currentLayout) {
-    const iframeId = slotIframeById.get(slot.id);
-    const url = slotTargetById.get(slot.id);
-    if (iframeId && url) assignments[iframeId] = url;
-  }
-  // Schlüssel aus den Iframe-IDs (sortiert) + zugewiesener URL — ändert sich
-  // nur wenn eine Region eine andere URL bekommt.
-  const key = Object.keys(assignments).sort().map(id => `${id}=${assignments[id]}`).join('|');
-  if (key === lastSyncedAssignmentsKey) return;
 
-  const js = Object.entries(assignments).map(([id, url]) => {
-    const esc = url.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    return `(function(){var f=document.getElementById('${id}');if(f&&f.src!=='${esc}')f.src='${esc}';})();`;
-  }).join('');
-  atlasLog(`[syncIframes] dispatch key=${key}`);
+  interface IframeSpec { domId: string; rectX: number; rectY: number; rectW: number; rectH: number; url: string; }
+  const specs: IframeSpec[] = [];
+  for (const slot of currentLayout) {
+    const url = slotTargetById.get(slot.id) ?? 'about:blank';
+    specs.push({
+      domId: sourceIdToDomId(slot.id),
+      rectX: slot.rectX, rectY: slot.rectY, rectW: slot.rectW, rectH: slot.rectH,
+      url,
+    });
+  }
+  // DOM-Key: ändert sich bei Add/Remove/Resize/URL-Wechsel; bleibt stabil
+  // wenn nur Pose im Layer mutiert.
+  const key = specs
+    .map(s => `${s.domId}@${s.rectX},${s.rectY},${s.rectW},${s.rectH}=${s.url}`)
+    .sort()
+    .join('|');
+  if (key === lastSyncedDomKey) return;
+
+  // Reconciler-JS: bekommt die Spec-Liste, löscht .panel die nicht mehr drin
+  // sind, legt fehlende an, updated style + src der bestehenden.
+  const specsJson = JSON.stringify(specs);
+  const js = `(function(specs){
+    var root = document.getElementById('atlas-root');
+    if (!root) return;
+    var wanted = {};
+    for (var i = 0; i < specs.length; i++) wanted[specs[i].domId] = specs[i];
+    var existing = root.querySelectorAll('.panel');
+    for (var j = 0; j < existing.length; j++) {
+      var el = existing[j];
+      if (!wanted[el.id]) el.parentNode.removeChild(el);
+    }
+    for (var k = 0; k < specs.length; k++) {
+      var s = specs[k];
+      var panel = document.getElementById(s.domId);
+      if (!panel) {
+        panel = document.createElement('div');
+        panel.className = 'panel';
+        panel.id = s.domId;
+        var f = document.createElement('iframe');
+        panel.appendChild(f);
+        root.appendChild(panel);
+      }
+      panel.style.left   = s.rectX + 'px';
+      panel.style.top    = s.rectY + 'px';
+      panel.style.width  = s.rectW + 'px';
+      panel.style.height = s.rectH + 'px';
+      var frame = panel.querySelector('iframe');
+      if (frame && frame.src !== s.url) frame.src = s.url;
+    }
+  })(${specsJson});`;
+
+  atlasLog(`[syncIframes] dispatch n=${specs.length} key-bytes=${key.length}`);
   atlasWindow.webContents.executeJavaScript(js)
     .then(() => {
-      lastSyncedAssignmentsKey = key;  // commit erst nach Success
+      lastSyncedDomKey = key;
       atlasLog('[syncIframes] ok');
     })
     .catch((e: Error) => {
@@ -239,10 +344,26 @@ function syncIframes(): void {
     });
 }
 
+// Atlas-BrowserWindow auf die vom Packer geforderte Größe ziehen + Felder
+// updaten. Wird nur bei Topology-Change gerufen (siehe applyWpfLayout). Layer
+// erkennt die neue WGC-Source-Größe im nächsten xrEndFrame und re-allokiert
+// Swapchain + Compute-Intermediate (Layer-C3b-Task).
+function resizeAtlasWindow(newW: number, newH: number): void {
+  const w = Math.max(MIN_ATLAS_DIM, newW);
+  const h = Math.max(MIN_ATLAS_DIM, newH);
+  if (w === atlasWidth && h === atlasHeight) return;
+  atlasWidth  = w;
+  atlasHeight = h;
+  if (atlasWindow && !atlasWindow.isDestroyed()) {
+    atlasWindow.setContentSize(w, h);
+    atlasLog(`[resizeAtlasWindow] setContentSize ${w}x${h}`);
+  }
+}
+
 function createCapturedWindow() {
   const win = new BrowserWindow({
-    width: ATLAS_WIDTH,
-    height: ATLAS_HEIGHT,
+    width: atlasWidth,
+    height: atlasHeight,
     // C4 Diagnose-Schritt (4.6.2026): erstmal ON-SCREEN sichtbar testen.
     // Off-screen (-9999) lieferte alpha=0 ins HMD — Verdacht: Chromium
     // suppressed Paint bei off-screen Fenstern. On-screen schließt das aus
@@ -251,8 +372,8 @@ function createCapturedWindow() {
     x: 100,
     y: 100,
     show: true,
-    // Frameless so WGC's captured client area exactly matches ATLAS_WIDTH x
-    // ATLAS_HEIGHT. With frame: true the Win32 chrome eats ~14 px off each
+    // Frameless so WGC's captured client area exactly matches atlasWidth x
+    // atlasHeight. With frame: true the Win32 chrome eats ~14 px off each
     // axis, WGC reports the smaller client size to the layer, and quad rects
     // configured against the atlas size run past the swapchain edge →
     // XR_ERROR_SWAPCHAIN_RECT_INVALID stalls iRacing's loader.
