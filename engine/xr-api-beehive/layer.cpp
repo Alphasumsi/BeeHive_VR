@@ -826,10 +826,10 @@ void main(uint2 tid : SV_DispatchThreadID)
                     break;
                 }
                 case 3:
-                    m_dragYawDeg   = m_dragYawRef   + (curYaw   - m_ctrlYawRef);
-                    // Tilt invertiert (User 4.6.2026): nach unten kippen am
-                    // Controller = Quad-Pitch nach oben statt nach unten. Gefühlt
-                    // intuitiver für „Overlay zu mir kippen".
+                    // Tilt (Yaw+Pitch) invertiert (User 4.6.2026): Controller-
+                    // Kipprichtung = Quad-Kipprichtung gespiegelt. Gefühlt
+                    // intuitiver für „Overlay zu mir kippen / wegdrehen".
+                    m_dragYawDeg   = m_dragYawRef   - (curYaw   - m_ctrlYawRef);
                     m_dragPitchDeg = m_dragPitchRef - (curPitch - m_ctrlPitchRef);
                     QuatFromYawPitchDeg(m_dragYawDeg, m_dragPitchDeg,
                                         m_dragQuatX, m_dragQuatY, m_dragQuatZ, m_dragQuatW);
