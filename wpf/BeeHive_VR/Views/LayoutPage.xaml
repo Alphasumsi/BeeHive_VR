@@ -229,20 +229,8 @@
             <!-- ========================================================== -->
             <!-- Overlay-Cards                                              -->
             <!-- ========================================================== -->
-            <DockPanel Margin="0,0,0,8" LastChildFill="False">
-                <TextBlock DockPanel.Dock="Left" Style="{StaticResource SectionLabel}" Text="OVERLAYS"
-                           VerticalAlignment="Center"/>
-                <!-- Cycle target: nur sichtbar während Source-spezifischer Place-Mode aktiv ist.
-                     Alternative zum Controller-Ray wenn der User keinen passenden Trigger hat. -->
-                <Button DockPanel.Dock="Right" Content="Cycle target"
-                        Padding="10,4" Cursor="Hand"
-                        ToolTip="Wechselt im Place-in-VR-Modus auf das nächste sichtbare Overlay."
-                        Visibility="{Binding DataContext.ActivePlaceSourceId,
-                                     RelativeSource={RelativeSource AncestorType=Window},
-                                     Converter={StaticResource NullToVis}}"
-                        Command="{Binding DataContext.CyclePlaceTargetCommand,
-                                  RelativeSource={RelativeSource AncestorType=Window}}"/>
-            </DockPanel>
+            <TextBlock Style="{StaticResource SectionLabel}" Text="OVERLAYS"
+                       Margin="0,0,0,8"/>
 
             <!-- Empty-State: nur sichtbar wenn keine Overlays -->
             <Border BorderBrush="{StaticResource BorderTertiary}"

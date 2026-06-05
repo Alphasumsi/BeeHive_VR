@@ -10,7 +10,6 @@ public enum KeybindAction
     ToggleOverlays,
     RecenterVr,
     PlaceInVr,
-    PlaceCycle,
 }
 
 /// <summary>
@@ -50,13 +49,6 @@ public static class KeybindCatalog
             Action = KeybindAction.PlaceInVr,
             DisplayName = "Place in VR",
             Description = "Toggle VR placement mode for the selected overlay",
-            IsActive = true,
-        },
-        new KeybindActionInfo
-        {
-            Action = KeybindAction.PlaceCycle,
-            DisplayName = "Place: cycle target",
-            Description = "While placing, select the next overlay (wraps around)",
             IsActive = true,
         },
     };

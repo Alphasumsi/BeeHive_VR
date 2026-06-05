@@ -51,11 +51,6 @@ public sealed class KeybindService
                     EngineLink.Instance.PushPlaceMode(_placeModeOn);
                     Logger.Info($"Keybind: Place in VR {(_placeModeOn ? "ON" : "OFF")}");
                     break;
-
-                case KeybindAction.PlaceCycle:
-                    EngineLink.Instance.PushPlaceCycle();
-                    Logger.Info("Keybind: Place cycle → next overlay");
-                    break;
             }
         });
     }

@@ -257,12 +257,6 @@ public sealed class EngineLink
         PlaceModeChanged?.Invoke(this, on);
     }
 
-    /// <summary>Wechselt im Place-Modus die Auswahl aufs nächste sichtbare Overlay.</summary>
-    public void PushPlaceCycle()
-    {
-        SendJson(new { type = "placeCycle" });
-    }
-
     // ---------------------------------------------------------------- internals
 
     private async Task ServerLoopAsync(CancellationToken ct)

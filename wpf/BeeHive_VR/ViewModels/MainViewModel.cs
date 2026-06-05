@@ -1111,21 +1111,6 @@ public partial class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Zykliert im aktiven Place-Mode auf die nächste sichtbare Source im Layout
-    /// (Engine wählt). Wenn kein Place-Mode aktiv ist, passiert nichts.
-    /// </summary>
-    [RelayCommand]
-    private void CyclePlaceTarget()
-    {
-        if (!EngineLink.Instance.IsPlaceModeOn) return;
-        EngineLink.Instance.PushPlaceCycle();
-        // Die Engine sendet danach placeUpdate für die neu gewählte Source —
-        // FindLiveSourceById/OnPlaceUpdate übernehmen den restlichen Sync.
-        // Snapshot bleibt auf der zuvor gestarteten Source (Cancel kehrt dorthin
-        // zurück); IsPlacing-Flag auf der Karte bleibt deshalb auch dort.
-    }
-
-    /// <summary>
     /// Setzt Position/Rotation/Scale/Opacity einer Overlay auf Default-Werte zurück.
     /// </summary>
     [RelayCommand]
@@ -1293,10 +1278,10 @@ public partial class MainViewModel : ObservableObject
         var src = FindLiveSourceById(pu.Id);
         if (src == null) return;
 
-        // Cycle-Edge-Case: Engine kann nach placeCycle auf eine andere Source
-        // wechseln. Erstes Update für eine Source → Pre-Place-Werte sichern
-        // (Cancel kann sie zurückrollen), Active-State und IsPlacing-Flag
-        // auf die neue Source umschwenken.
+        // Grab-Switch: Engine kann während aktiver Place-Session per Aim-Ray-
+        // Hit-Test auf eine andere Source greifen. Erstes Update für eine
+        // Source → Pre-Place-Werte sichern (Cancel kann sie zurückrollen),
+        // Active-State und IsPlacing-Flag auf die neue Source umschwenken.
         if (_placeSnapshots.Count > 0 && !_placeSnapshots.ContainsKey(pu.Id))
         {
             _placeSnapshots[pu.Id] = new PlaceSnapshot(
