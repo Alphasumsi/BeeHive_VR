@@ -116,7 +116,9 @@ public partial class LayoutPage : UserControl
                 src.Z = Nudge(src.Z, pick(0.001f, 0.01f, 0.10f), minus, -3f, 0f, dec(2));
                 break;
             case "Yaw":
-                src.Yaw = Nudge(src.Yaw, pick(0.1f, 1f, 5f), minus, -180f, 180f, dec(0));
+                // 5.6.2026: Range auf ±90° (war ±180°) — über 90° dreht der Quad
+                // sich mit der Rückseite zum User. Layer clampt im Tilt-Drag analog.
+                src.Yaw = Nudge(src.Yaw, pick(0.1f, 1f, 5f), minus, -90f, 90f, dec(0));
                 break;
             case "Pitch":
                 src.Pitch = Nudge(src.Pitch, pick(0.1f, 1f, 5f), minus, -90f, 90f, dec(0));

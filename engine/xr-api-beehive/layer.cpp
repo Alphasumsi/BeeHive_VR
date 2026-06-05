@@ -959,7 +959,10 @@ void main(uint2 tid : SV_DispatchThreadID)
                     // Tilt (Yaw+Pitch) invertiert (User 4.6.2026): Controller-
                     // Kipprichtung = Quad-Kipprichtung gespiegelt. Gefühlt
                     // intuitiver für „Overlay zu mir kippen / wegdrehen".
-                    m_dragYawDeg   = m_dragYawRef   - (curYaw   - m_ctrlYawRef);
+                    // Yaw 5.6.2026: ±90° geclamped — über 90° dreht das Overlay
+                    // weg vom User (Rückseite), darunter unbedenklich.
+                    m_dragYawDeg   = std::clamp(
+                        m_dragYawRef   - (curYaw   - m_ctrlYawRef), -90.f, 90.f);
                     m_dragPitchDeg = m_dragPitchRef - (curPitch - m_ctrlPitchRef);
                     QuatFromYawPitchDeg(m_dragYawDeg, m_dragPitchDeg,
                                         m_dragQuatX, m_dragQuatY, m_dragQuatZ, m_dragQuatW);

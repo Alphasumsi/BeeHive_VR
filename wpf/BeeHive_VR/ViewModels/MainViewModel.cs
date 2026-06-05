@@ -659,6 +659,45 @@ public partial class MainViewModel : ObservableObject
     /// Liefert false wenn kein Layout „set as active" ist (Dashies zeigt
     /// dann eine Fehlermeldung).
     /// </summary>
+    /// <summary>
+    /// (5.6.2026) Prüft den vorgeschlagenen Namen gegen das aktuell editierte
+    /// Set und hängt " (n)" an wenn schon vergeben. Geltungsbereich:
+    /// Spotter-Set wenn EditingSpotter, sonst aktive Session (oder alle 4
+    /// wenn EditingAllSessions gerade aktiv ist — sonst würde der All-Sessions-
+    /// Add in eine bereits belegte Session knallen). Manuelle Renames bleiben
+    /// unangetastet — Konflikt erst beim nächsten Add aufgelöst.
+    /// </summary>
+    public string EnsureUniqueSourceName(string proposed)
+    {
+        var existing = new HashSet<string>(System.StringComparer.Ordinal);
+        if (EditingSpotter)
+        {
+            foreach (var s in SpotterLayout.Sources) existing.Add(s.Name);
+        }
+        else if (ActiveLayout != null)
+        {
+            if (ActiveLayout.EditingAllSessions)
+            {
+                foreach (var st in System.Enum.GetValues<BeeHiveVR.Models.SessionType>())
+                    foreach (var s in ActiveLayout.GetSessionSources(st))
+                        existing.Add(s.Name);
+            }
+            else
+            {
+                foreach (var s in ActiveLayout.GetSessionSources(ActiveLayout.SelectedSession))
+                    existing.Add(s.Name);
+            }
+        }
+
+        if (!existing.Contains(proposed)) return proposed;
+        for (int n = 2; n < 1000; n++)
+        {
+            var candidate = $"{proposed} ({n})";
+            if (!existing.Contains(candidate)) return candidate;
+        }
+        return proposed; // safeguard — unwahrscheinlich
+    }
+
     public bool AddSourceToActiveLayout(SourceViewModel sv)
     {
         // Spotter aktiv → ins car-unabhängige Spotter-Set (Persist + Engine-Push laufen

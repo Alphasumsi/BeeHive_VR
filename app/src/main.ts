@@ -109,6 +109,12 @@ const DEFAULT_RECT_W   = 512;
 const DEFAULT_RECT_H   = 384;
 // BrowserWindow-Mindest-Größe (Chromium mag keine 0×0).
 const MIN_ATLAS_DIM    = 16;
+// Sicherheits-Streifen zwischen Quads + zum Atlas-Rand (5.6.2026).
+// OpenXR-Compositor sampelt bilinear an der Quad-Grenze und kann Border-Pixel
+// vom Nachbar-Quad einlesen → weißer Bleed auf der falschen Seite. Mit
+// transparenten Gap-Pixeln zwischen den Rects bekommt der Sampler höchstens
+// alpha=0 zu fressen, kein Farbüberlauf.
+const ATLAS_QUAD_GAP_PX = 10;
 
 // WPF authoritatively owns which quads exist — nothing in VR until
 // setAtlasLayout arrives with at least one entry.
@@ -167,20 +173,25 @@ function packShelf(inputs: PackInput[]):
     { rects: PackOutput[]; atlasW: number; atlasH: number } {
   const sorted = inputs.slice().sort((a, b) => b.rectH - a.rectH);
   const rects: PackOutput[] = [];
-  let rowY = 0, rowH = 0, cursorX = 0, maxX = 0;
+  const gap = ATLAS_QUAD_GAP_PX;
+  // Erste Zeile startet bei gap (linker + oberer Rand-Streifen). Bei
+  // 0 Quads kommt unten MIN_ATLAS_DIM zum Tragen.
+  let rowY = gap, rowH = 0, cursorX = gap, maxX = 0;
   for (const it of sorted) {
     const w = Math.max(1, Math.floor(it.rectW));
     const h = Math.max(1, Math.floor(it.rectH));
-    if (cursorX > 0 && cursorX + w > PACKER_MAX_WIDTH) {
-      rowY += rowH; rowH = 0; cursorX = 0;
+    if (cursorX > gap && cursorX + w > PACKER_MAX_WIDTH - gap) {
+      rowY += rowH + gap; rowH = 0; cursorX = gap;
     }
     rects.push({ id: it.id, rectX: cursorX, rectY: rowY, rectW: w, rectH: h });
-    cursorX += w;
+    cursorX += w + gap;
     if (h > rowH) rowH = h;
     if (cursorX > maxX) maxX = cursorX;
   }
+  // maxX/rowY+rowH zeigen schon hinter den letzten Quad inkl. trailing gap.
+  // Nochmal +gap für den rechten/unteren Rand wäre doppelt → einfach so lassen.
   const atlasW = Math.max(MIN_ATLAS_DIM, maxX);
-  const atlasH = Math.max(MIN_ATLAS_DIM, rowY + rowH);
+  const atlasH = Math.max(MIN_ATLAS_DIM, rowY + rowH + gap);
   return { rects, atlasW, atlasH };
 }
 

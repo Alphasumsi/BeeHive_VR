@@ -580,7 +580,10 @@
                                             <TextBlock Text="Yaw" FontSize="13"
                                                        Foreground="{StaticResource TextSecondary}"
                                                        VerticalAlignment="Center"/>
-                                            <Slider Grid.Column="1" Minimum="-180" Maximum="180"
+                                            <!-- Yaw ±90° (5.6.2026): Layer clampt im Tilt-Drag schon
+                                                 auf 90°, der Slider muss mit. Drüber wäre der Quad
+                                                 mit der Rückseite zum User → sinnlos. -->
+                                            <Slider Grid.Column="1" Minimum="-90" Maximum="90"
                                                     Value="{Binding Yaw}" Margin="6,0"/>
                                             <StackPanel Grid.Column="2" Orientation="Horizontal"
                                                         VerticalAlignment="Center" Margin="0,0,6,0">

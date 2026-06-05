@@ -858,7 +858,7 @@ public partial class DashiesPage : UserControl
         var sv = new SourceViewModel
         {
             Id = NewId(),
-            Name = $"{name} Dashie",
+            Name = vm.EnsureUniqueSourceName($"{name} Dashie"),
             Type = SourceType.Browser,
             Target = DashiesPreviewService.BuildUrl(id),
             Visible = true,
