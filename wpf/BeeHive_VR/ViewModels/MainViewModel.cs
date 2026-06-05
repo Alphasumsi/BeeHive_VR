@@ -774,9 +774,15 @@ public partial class MainViewModel : ObservableObject
 
     private static IEnumerable<AtlasQuadDto> BuildAtlasQuads(IEnumerable<SourceModel> sources)
     {
+        // C6: unsichtbare Sources werden GAR NICHT gepusht — gibt Atlas-Slot
+        // frei (MAX_QUADS=8) und zerstört das Iframe (spart CPU/GPU). Re-Toggle
+        // auf Visible=true baut das Iframe frisch wieder auf — URL lädt neu.
+        // Bewusst akzeptiert: "ausblenden" hieß bisher nur Render-Mute, jetzt
+        // echtes Freigeben des Slots.
         int i = 0;
         foreach (var s in sources)
         {
+            if (!s.Visible) continue;
             if (i++ >= AtlasSlotsAvailable) yield break;
             var (qx, qy, qz, qw) = YawPitchToQuat(s.Yaw, s.Pitch);
 
@@ -808,6 +814,9 @@ public partial class MainViewModel : ObservableObject
                 RectH   = s.PixelHeight > 0 ? s.PixelHeight : DefaultRectH,
                 // Phase 3 (5.6.2026): User-Name für den Sticker am Quad.
                 Name    = s.Name,
+                // C6: Subtyp — "browser" oder "window". Electron-Resolver
+                // baut daraus die finale iframe-URL.
+                Type    = s.Type == SourceType.Window ? "window" : "browser",
             };
         }
     }

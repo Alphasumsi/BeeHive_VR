@@ -88,7 +88,13 @@
 
                     <ComboBox x:Name="WindowCombo"
                               Grid.Column="0"
-                              SelectionChanged="WindowCombo_SelectionChanged" Margin="0,7,0,7"/>
+                              SelectionChanged="WindowCombo_SelectionChanged" Margin="0,7,0,7">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}" TextTrimming="CharacterEllipsis"/>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
 
                     <Button Grid.Column="1" Content="Refresh" Margin="6,7,0,7" Padding="12,0"
                             ToolTip="Refresh window list"
@@ -105,7 +111,7 @@
 
                     <TextBlock Grid.Column="2"
                                Text="Extended"
-                               FontSize="12"
+                               FontSize="11"
                                Foreground="{StaticResource TextSecondary}"
                                VerticalAlignment="Top" Margin="18,25,12,0" Height="12"/>
                 </Grid>

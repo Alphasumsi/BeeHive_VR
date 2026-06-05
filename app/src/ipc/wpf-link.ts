@@ -43,6 +43,12 @@ export interface AtlasQuadFromWpf {
   // Phase 3 (5.6.2026): User-vergebener Anzeigename (z.B. „Relative Dashie").
   // Atlas zeigt ihn als Sticker am Quad bei Hover/Grab.
   name?:    string;
+  // C6 (5.6.2026): Source-Subtyp. "browser" → target ist iframe.src direkt.
+  // "window" → target ist Fenstertitel; main.ts resolved per
+  // desktopCapturer.getSources den match und baut eine Wrapper-URL
+  // window-capture.html?sourceId=<dc-id>&title=<urlenc>.
+  // Undefined wird als "browser" behandelt (Rückwärts-Kompat).
+  type?:    string;
 }
 
 class WpfLink extends EventEmitter {

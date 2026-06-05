@@ -322,7 +322,15 @@ public partial class LayoutPage : UserControl
             Yaw = 0.0f,
             Pitch = 0.0f,
             Scale = scale,
-            Opacity = 1.0f
+            Opacity = 1.0f,
+            // C6: Atlas-Region in echten Fenster-Pixeln packen. C3b-Shelf-Packer
+            // nutzt PixelWidth/Height, sonst fällt MainViewModel auf 512×384
+            // Default zurück und das Quad-Aspect stimmt nicht. Klamp gegen
+            // Riesen-Fenster (>2048 sprengt den Atlas-Wrap).
+            PixelWidth  = dlg.SelectedWindowPixelWidth  > 0
+                ? System.Math.Min(dlg.SelectedWindowPixelWidth,  2048) : 0,
+            PixelHeight = dlg.SelectedWindowPixelHeight > 0
+                ? System.Math.Min(dlg.SelectedWindowPixelHeight, 2048) : 0,
         };
     }
 

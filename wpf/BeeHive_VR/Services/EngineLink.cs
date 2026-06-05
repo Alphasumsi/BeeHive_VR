@@ -67,6 +67,15 @@ public sealed class AtlasQuadDto
     /// stabilisiert hat (150 ms Throttle).
     /// </summary>
     [JsonPropertyName("name")]    public string? Name { get; set; }
+
+    /// <summary>
+    /// C6 (5.6.2026): Source-Subtyp im Atlas. <c>"browser"</c> → Electron lädt
+    /// <see cref="Target"/> direkt als iframe.src (SimHub-URL, beliebige HTML).
+    /// <c>"window"</c> → Target ist Fenstertitel; Electron baut eine
+    /// Wrapper-URL <c>file://…/window-capture.html?title=&lt;urlenc&gt;</c>
+    /// die per <c>desktopCapturer.getUserMedia</c> ein &lt;video&gt; rendert.
+    /// </summary>
+    [JsonPropertyName("type")]    public string? Type { get; set; }
 }
 
 public sealed class EngineSourceStatus

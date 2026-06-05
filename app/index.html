@@ -19,6 +19,12 @@
              background: transparent; }
     .panel iframe { width: 100%; height: 100%; border: 0; display: block;
                     background: transparent; }
+    /* C6 (5.6.2026): Window-Capture nutzt <video> statt <iframe>. Gleiche
+       Layout-Regeln, object-fit:fill damit das Capture exakt das Quad
+       ausfüllt (User akzeptiert dass Resize des Quell-Fensters den Aspect
+       verzerren kann — siehe Project_Status_BeeHive.md C6). */
+    .panel video { width: 100%; height: 100%; border: 0; display: block;
+                   background: transparent; object-fit: fill; }
     /* Phase 3 (5.6.2026): Source-Name-Sticker am Quad. Sichtbar nur wenn
        Layer hoveredId == diese Source (Throttle 150 ms). Position INNERHALB
        des Quad-Rects oben links — Layer-imageRect submittet nur den Quad-

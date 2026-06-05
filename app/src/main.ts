@@ -15,7 +15,7 @@
 // unchanged so we can roll back without recompiling the layer. Renamed in
 // step 3 after the visual proof.
 
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, desktopCapturer } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import started from 'electron-squirrel-startup';
@@ -132,6 +132,99 @@ const slotTargetById = new Map<string, string>();
 // über currentHoveredId-Klasse.
 const slotNameById = new Map<string, string>();
 
+// C6 (5.6.2026): Subtyp pro Quad. "browser" → DOM-Element ist <iframe> mit
+// src=target. "window" → DOM-Element ist <video> mit MediaStream aus
+// desktopCapturer. Default (fehlt/null) = "browser" für Rückwärts-Kompat.
+const slotTypeById = new Map<string, string>();
+
+// C6 (5.6.2026): WPF-gegebener Visible-Flag pro Slot (vor iconic-Maskierung).
+// Brauchen wir um beim de-Minimieren wieder auf den User-Wunsch zurückzukehren
+// ohne dass der WPF-Push verloren geht.
+const wpfVisibleById = new Map<string, boolean>();
+
+// C6 (5.6.2026): Iconic-State pro Slot. true = Quell-Fenster ist minimiert,
+// Slot wird in syncIframes übersprungen (Panel weg, Stream stoppt) und im
+// FrameSlot.visible auf false gespiegelt (Layer rendert nichts). Aktualisiert
+// im 3-s-Refresh-Takt: Title fehlt in desktopCapturer-Liste → iconic.
+const iconicById = new Map<string, boolean>();
+
+// Spiegelt wpfVisibleById ∧ ¬iconicById auf currentLayout[i].visible.
+function applyEffectiveVisibility(): void {
+  for (const slot of currentLayout) {
+    const wpf = wpfVisibleById.get(slot.id) ?? true;
+    const minimized = iconicById.get(slot.id) ?? false;
+    slot.visible = wpf && !minimized;
+  }
+}
+
+// C6: Title → desktopCapturer-sourceId Cache. WPF schickt den Fenstertitel als
+// `target`; Electron muss daraus die opake sourceId resolven die getUserMedia
+// braucht. Periodischer Refresh (3 s) hält den Cache aktuell — Fenster die
+// neu aufgehen oder ihren Titel ändern werden automatisch eingesammelt. Bei
+// Cache-Miss rendert syncIframes ein schwarzes Placeholder-Video; sobald der
+// Refresh die ID kennt, baut die nächste syncIframes-Runde den Stream.
+const windowSourceIdByTitle = new Map<string, string>();
+let windowRefreshTimer: NodeJS.Timeout | null = null;
+
+async function refreshWindowSources(): Promise<void> {
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ['window'],
+      thumbnailSize: { width: 0, height: 0 }, // Thumbnails brauchen wir nicht
+      fetchWindowIcons: false,
+    });
+    const prevKeys = new Set(windowSourceIdByTitle.keys());
+    let changed = false;
+    windowSourceIdByTitle.clear();
+    for (const s of sources) {
+      windowSourceIdByTitle.set(s.name, s.id);
+      if (!prevKeys.has(s.name)) changed = true;
+      prevKeys.delete(s.name);
+    }
+    if (prevKeys.size > 0) changed = true; // Fenster verschwunden
+    // C6 (5.6.2026): Iconic-Erkennung via ABSENZ aus desktopCapturer-Liste.
+    // Hintergrund: Electron-Doku — "On Windows, getSources() excludes
+    // minimized windows from the result." Damit ist die Title-Cache-Lookup
+    // unten die ganze Wahrheit: Title noch in Cache → Fenster sichtbar;
+    // Title nicht mehr in Cache → minimiert (oder geschlossen, was wir hier
+    // gleich behandeln). Spart IsIconic-Win32-Aufruf.
+    // Edge-Case: Title-Flicker (z.B. Notepad „* – …") triggert kurz
+    // false-positive iconic → 3-s-Hide-Cycle. Akzeptiert.
+    let iconicChanged = false;
+    const seenIconic = new Set<string>();
+    for (const slot of currentLayout) {
+      if (slotTypeById.get(slot.id) !== 'window') continue;
+      const title = slotTargetById.get(slot.id);
+      if (!title) continue;
+      seenIconic.add(slot.id);
+      const minimized = !windowSourceIdByTitle.has(title);
+      if (iconicById.get(slot.id) !== minimized) {
+        iconicById.set(slot.id, minimized);
+        iconicChanged = true;
+      }
+    }
+    // Slots die nicht mehr da sind aus iconicById raus.
+    for (const id of Array.from(iconicById.keys())) {
+      if (!seenIconic.has(id)) { iconicById.delete(id); iconicChanged = true; }
+    }
+
+    if (changed || iconicChanged) {
+      atlasLog(`[refreshWindowSources] n=${sources.length}`);
+      applyEffectiveVisibility();
+      republish();
+      syncIframes();
+    }
+  } catch (e) {
+    atlasLog(`[refreshWindowSources] FAIL: ${(e as Error).message}`);
+  }
+}
+
+function startWindowSourceRefresh(): void {
+  if (windowRefreshTimer) return;
+  void refreshWindowSources();
+  windowRefreshTimer = setInterval(() => { void refreshWindowSources(); }, 3000);
+}
+
 // Phase 3: aktuell gehoveretem/grabbed-Id aus dem Layer (kommt via PlaceOut).
 // Triggert syncIframes-Update damit Sticker an/aus geht.
 let currentHoveredId = '';
@@ -150,7 +243,7 @@ const currentRectWishById = new Map<string, { w: number; h: number }>();
 // gespiegelt; Layer liest FrameSlot.placeModeOn (uint32, war reserved).
 let currentPlaceModeOn = false;
 
-let currentHwnd: bigint = 0n;
+let currentHwnd = 0n;
 let atlasWindow: BrowserWindow | null = null;
 
 // Race-Schutz: erst syncIframes feuern wenn die Atlas-Page komplett
@@ -222,7 +315,7 @@ function topologyChanged(quads: AtlasQuadFromWpf[]): boolean {
 function applyWpfLayout(quads: AtlasQuadFromWpf[]): void {
   // ⚠ Diagnose-Log (3.6.2026): zeigt was Atlas-Main empfängt + State des
   // Atlas-Windows. Schreibt ins File damit's auch ohne DevTools sichtbar ist.
-  const debug = quads.map(q => `${q.id}:${q.target ?? '<undef>'}`).join(' ');
+  const debug = quads.map(q => `${q.id}[${q.type ?? '<no-type>'}]:${q.target ?? '<undef>'}`).join(' ');
   const winState = !atlasWindow ? 'NULL'
                   : atlasWindow.isDestroyed() ? 'DESTROYED'
                   : atlasWindow.webContents.isLoading() ? 'LOADING'
@@ -261,12 +354,21 @@ function applyWpfLayout(quads: AtlasQuadFromWpf[]): void {
     resizeAtlasWindow(atlasW, atlasH);
     atlasLog(`[applyWpfLayout] repack: atlas=${atlasW}x${atlasH} regions=${rects.length}`);
 
-    // (5) URL-Map + Name-Map auf aktuelle Ids reduzieren.
+    // (5) URL-Map + Name-Map + Type-Map auf aktuelle Ids reduzieren.
     for (const id of Array.from(slotTargetById.keys())) {
       if (!quads.some(q => q.id === id)) slotTargetById.delete(id);
     }
     for (const id of Array.from(slotNameById.keys())) {
       if (!quads.some(q => q.id === id)) slotNameById.delete(id);
+    }
+    for (const id of Array.from(slotTypeById.keys())) {
+      if (!quads.some(q => q.id === id)) slotTypeById.delete(id);
+    }
+    for (const id of Array.from(wpfVisibleById.keys())) {
+      if (!quads.some(q => q.id === id)) wpfVisibleById.delete(id);
+    }
+    for (const id of Array.from(iconicById.keys())) {
+      if (!quads.some(q => q.id === id)) iconicById.delete(id);
     }
   } else {
     // Pose-Only-Update: currentLayout in der Größe stabil, nur Pose/Vis-Felder
@@ -282,11 +384,19 @@ function applyWpfLayout(quads: AtlasQuadFromWpf[]): void {
     slot.posX  = q.posX;  slot.posY  = q.posY;  slot.posZ  = q.posZ;
     slot.quatX = q.quatX; slot.quatY = q.quatY; slot.quatZ = q.quatZ; slot.quatW = q.quatW;
     slot.sizeW = q.sizeW; slot.sizeH = q.sizeH;
-    slot.visible = q.visible;
     slot.opacity = q.opacity ?? 1.0;
+    wpfVisibleById.set(q.id, q.visible);
     if (q.target) slotTargetById.set(q.id, q.target);
     if (q.name)   slotNameById.set(q.id, q.name);
+    if (q.type)   slotTypeById.set(q.id, q.type);
   }
+  // slot.visible berechnen aus wpfVisible ∧ ¬iconic (siehe C6).
+  applyEffectiveVisibility();
+
+  // C6: Refresh-Loop für Window-Sources nur starten wenn mindestens eine
+  // Window-Source aktiv ist. Spart die desktopCapturer-Abfrage solange nur
+  // Browser-Sources im Layout sind.
+  if (quads.some(q => q.type === 'window')) startWindowSourceRefresh();
 
   console.log(`[main] WPF layout applied: ${quads.length} quad(s), live=${currentLayout.length}, repack=${repack}`);
   republish();
@@ -313,31 +423,62 @@ function syncIframes(): void {
 
   interface IframeSpec {
     domId: string; rectX: number; rectY: number; rectW: number; rectH: number;
-    url: string; name: string; isActive: boolean;
+    kind: 'browser' | 'window';
+    url: string;          // nur relevant für kind=browser
+    sourceId: string;     // nur relevant für kind=window (desktopCapturer-id)
+    title: string;        // nur relevant für kind=window (Diagnose-Label)
+    name: string;
+    isActive: boolean;
   }
   const specs: IframeSpec[] = [];
   for (const slot of currentLayout) {
-    const url = slotTargetById.get(slot.id) ?? 'about:blank';
+    // C6: invisible (User-Toggle oder iconic-Quell-Fenster) → Slot bleibt im
+    // Atlas-Packer (Rect bleibt allokiert) aber Panel im DOM wird entfernt
+    // und der MediaStream gestoppt. Layer rendert das Quad ohnehin nicht.
+    if (!slot.visible) continue;
+    const type = slotTypeById.get(slot.id) ?? 'browser';
+    const target = slotTargetById.get(slot.id) ?? '';
     const name = slotNameById.get(slot.id) ?? '';
-    specs.push({
-      domId: sourceIdToDomId(slot.id),
-      rectX: slot.rectX, rectY: slot.rectY, rectW: slot.rectW, rectH: slot.rectH,
-      url, name,
-      isActive: slot.id === currentHoveredId,
-    });
+    if (type === 'window') {
+      const sourceId = windowSourceIdByTitle.get(target) ?? '';
+      specs.push({
+        domId: sourceIdToDomId(slot.id),
+        rectX: slot.rectX, rectY: slot.rectY, rectW: slot.rectW, rectH: slot.rectH,
+        kind: 'window',
+        url: '',
+        sourceId,
+        title: target,
+        name,
+        isActive: slot.id === currentHoveredId,
+      });
+    } else {
+      specs.push({
+        domId: sourceIdToDomId(slot.id),
+        rectX: slot.rectX, rectY: slot.rectY, rectW: slot.rectW, rectH: slot.rectH,
+        kind: 'browser',
+        url: target || 'about:blank',
+        sourceId: '',
+        title: '',
+        name,
+        isActive: slot.id === currentHoveredId,
+      });
+    }
   }
   // DOM-Key: ändert sich bei Add/Remove/Resize/URL-Wechsel UND bei
-  // Hover-Toggle (Sticker an/aus) UND bei Namenswechsel; bleibt stabil
-  // wenn nur Pose im Layer mutiert.
+  // Hover-Toggle (Sticker an/aus) UND bei Namenswechsel UND bei
+  // Kind/sourceId-Wechsel (Window-Capture wurde gefunden o. verloren);
+  // bleibt stabil wenn nur Pose im Layer mutiert.
   const key = specs
-    .map(s => `${s.domId}@${s.rectX},${s.rectY},${s.rectW},${s.rectH}=${s.url}|${s.name}|${s.isActive ? 'A' : '-'}`)
+    .map(s => `${s.domId}@${s.rectX},${s.rectY},${s.rectW},${s.rectH}=${s.kind}:${s.url}/${s.sourceId}|${s.name}|${s.isActive ? 'A' : '-'}`)
     .sort()
     .join('||');
   if (key === lastSyncedDomKey) return;
 
-  // Reconciler-JS: bekommt die Spec-Liste, löscht .panel die nicht mehr drin
-  // sind, legt fehlende an, updated style + src + Sticker-State der
-  // bestehenden.
+  // Reconciler-JS: pro Spec wird ein .panel sichergestellt das (a) das richtige
+  // Child-Element trägt (iframe für Browser, video für Window-Capture),
+  // (b) auf die richtige Position/Größe gezogen, (c) src/MediaStream/Sticker
+  // auf den aktuellen Stand gebracht. Container die nicht mehr in specs sind
+  // werden inkl. MediaStream-Stop entfernt.
   const specsJson = JSON.stringify(specs);
   const js = `(function(specs){
     var root = document.getElementById('atlas-root');
@@ -347,7 +488,16 @@ function syncIframes(): void {
     var existing = root.querySelectorAll('.panel');
     for (var j = 0; j < existing.length; j++) {
       var el = existing[j];
-      if (!wanted[el.id]) el.parentNode.removeChild(el);
+      if (!wanted[el.id]) {
+        // MediaStream sauber stoppen damit der Capture-Pin freigegeben wird,
+        // sonst hält Chromium das Quell-Fenster fest.
+        var v = el.querySelector('video');
+        if (v && v.srcObject) {
+          try { v.srcObject.getTracks().forEach(function(t){ t.stop(); }); } catch(_) {}
+          v.srcObject = null;
+        }
+        el.parentNode.removeChild(el);
+      }
     }
     for (var k = 0; k < specs.length; k++) {
       var s = specs[k];
@@ -356,8 +506,6 @@ function syncIframes(): void {
         panel = document.createElement('div');
         panel.className = 'panel';
         panel.id = s.domId;
-        var f = document.createElement('iframe');
-        panel.appendChild(f);
         var sticker = document.createElement('span');
         sticker.className = 'sticker';
         panel.appendChild(sticker);
@@ -367,8 +515,77 @@ function syncIframes(): void {
       panel.style.top    = s.rectY + 'px';
       panel.style.width  = s.rectW + 'px';
       panel.style.height = s.rectH + 'px';
-      var frame = panel.querySelector('iframe');
-      if (frame && frame.src !== s.url) frame.src = s.url;
+
+      // Kind-Wechsel: altes Child entfernen wenn falscher Typ.
+      var currentChild = panel.querySelector('iframe, video');
+      if (currentChild) {
+        var isVideo = currentChild.tagName === 'VIDEO';
+        if ((s.kind === 'window') !== isVideo) {
+          if (isVideo && currentChild.srcObject) {
+            try { currentChild.srcObject.getTracks().forEach(function(t){ t.stop(); }); } catch(_) {}
+          }
+          currentChild.parentNode.removeChild(currentChild);
+          currentChild = null;
+        }
+      }
+
+      if (s.kind === 'browser') {
+        var frame = currentChild;
+        if (!frame) {
+          frame = document.createElement('iframe');
+          panel.insertBefore(frame, panel.firstChild);
+        }
+        if (frame.src !== s.url) frame.src = s.url;
+      } else {
+        // window-Capture: <video> mit MediaStream aus desktopCapturer.
+        // Solange sourceId leer ist (Title noch nicht resolved) bleibt das
+        // video schwarz; nächste Refresh-Runde triggert syncIframes erneut.
+        var video = currentChild;
+        if (!video) {
+          video = document.createElement('video');
+          video.autoplay = true;
+          video.muted = true;
+          video.playsInline = true;
+          video.setAttribute('disablepictureinpicture', '');
+          panel.insertBefore(video, panel.firstChild);
+        }
+        var wantSource = s.sourceId || '';
+        // Stream nur stoppen/wechseln wenn ein NEUER non-empty sourceId vorliegt
+        // der sich von der aktuellen dataset.sourceId unterscheidet. Leere
+        // sourceId (Cache hat den Titel kurz nicht — z.B. desktopCapturer-
+        // Refresh-Race, Title-Flicker) lässt den laufenden Stream in Ruhe.
+        if (wantSource && video.dataset.sourceId !== wantSource) {
+          // Stream wechseln: alten Track stoppen.
+          if (video.srcObject) {
+            try { video.srcObject.getTracks().forEach(function(t){ t.stop(); }); } catch(_) {}
+            video.srcObject = null;
+          }
+          video.dataset.sourceId = wantSource;
+          video.dataset.title = s.title || '';
+          // IIFE: var-Loop-Vars (k, s, video, wantSource) sind sonst alle vom
+          // Schleifen-Ende geteilt — bei ≥2 neuen Window-Sources im selben
+          // syncIframes-Dispatch würden alle .then()-Callbacks im LETZTEN
+          // Video-Element landen (Streams vertauscht).
+          (function(vid, src, ttl){
+            navigator.mediaDevices.getUserMedia({
+              audio: false,
+              video: { mandatory: {
+                chromeMediaSource: 'desktop',
+                chromeMediaSourceId: src,
+              } }
+            }).then(function(stream){
+              if (vid.dataset.sourceId !== src) {
+                stream.getTracks().forEach(function(t){ t.stop(); });
+                return;
+              }
+              vid.srcObject = stream;
+            }).catch(function(err){
+              console.warn('[atlas] getUserMedia FAIL for', ttl, err.name, err.message);
+            });
+          })(video, wantSource, s.title);
+        }
+      }
+
       var sticker2 = panel.querySelector('.sticker');
       if (sticker2) {
         if (sticker2.textContent !== s.name) sticker2.textContent = s.name;
