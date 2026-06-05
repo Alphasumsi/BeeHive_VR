@@ -22,14 +22,16 @@ const HANDLE = koffi.pointer('HANDLE', koffi.opaque());
 // gilt weiter. WPF toggled über EngineLink.PushPlaceMode → wpf-link emit →
 // main.ts schreibt hier rein → Layer gated DrivePlaceMode darauf.
 const FrameSlot = koffi.struct('FrameSlot', {
-  generation:  'uint64_t',
-  producerPid: 'uint32_t',
-  placeModeOn: 'uint32_t',   // 0 = Trigger gesperrt, 1 = Trigger arbeitet (war: reserved)
-  hwnd:        'uint64_t',   // BrowserWindow HWND that WGC captures
-  width:       'uint32_t',
-  height:      'uint32_t',
-  format:      'uint32_t',
-  quadCount:   'uint32_t',   // number of valid entries in the QuadSlot array
+  generation:    'uint64_t',
+  producerPid:   'uint32_t',
+  placeModeOn:   'uint32_t',   // 0 = Trigger gesperrt, 1 = Trigger arbeitet (war: reserved)
+  hwnd:          'uint64_t',   // BrowserWindow HWND that WGC captures
+  width:         'uint32_t',
+  height:        'uint32_t',
+  format:        'uint32_t',
+  quadCount:     'uint32_t',   // number of valid entries in the QuadSlot array
+  recenterEpoch: 'uint32_t',   // B7 (5.6.2026): monoton steigend, jeder Recenter-Request +1; Layer reagiert auf Wechsel
+  reserved2:     'uint32_t',   // explizites Padding für deterministische 48 Bytes (matcht Layer-Side)
 });
 const FRAME_SLOT_SIZE: number = koffi.sizeof(FrameSlot);
 
@@ -92,11 +94,12 @@ const NAME_MAPPING = 'Local\\BeeHiveVR_Frame';
 const NAME_MUTEX   = 'Global\\BeeHiveVR_Instance';
 
 export interface FramePublish {
-  hwnd:        bigint;   // BrowserWindow HWND that the layer will WGC-capture
-  width:       number;   // atlas width in pixels
-  height:      number;   // atlas height in pixels
-  format:      number;   // DXGI_FORMAT advertised to the layer (informational)
-  placeModeOn: boolean;  // Phase 1: Trigger gated. Layer skipt DrivePlaceMode wenn false.
+  hwnd:          bigint;   // BrowserWindow HWND that the layer will WGC-capture
+  width:         number;   // atlas width in pixels
+  height:        number;   // atlas height in pixels
+  format:        number;   // DXGI_FORMAT advertised to the layer (informational)
+  placeModeOn:   boolean;  // Phase 1: Trigger gated. Layer skipt DrivePlaceMode wenn false.
+  recenterEpoch: number;   // B7: monoton steigend, Layer reagiert auf Wechsel
 }
 
 // One sub-region of the atlas. id is for human debugging only; layer doesn't
@@ -147,6 +150,7 @@ class SharedFrameChannel {
     koffi.encode(this.mapView, FrameSlot, {
       generation: 0n, producerPid: 0, placeModeOn: 0,
       hwnd: 0n, width: 0, height: 0, format: 0, quadCount: 0,
+      recenterEpoch: 0, reserved2: 0,
     });
     const empty = {
       id: '',
@@ -169,14 +173,16 @@ class SharedFrameChannel {
     this.generation++;
 
     koffi.encode(this.mapView, FrameSlot, {
-      generation:  this.generation,
-      producerPid: process.pid,
-      placeModeOn: f.placeModeOn ? 1 : 0,
-      hwnd:        f.hwnd,
-      width:       f.width,
-      height:      f.height,
-      format:      f.format,
-      quadCount:   quads.length,
+      generation:    this.generation,
+      producerPid:   process.pid,
+      placeModeOn:   f.placeModeOn ? 1 : 0,
+      hwnd:          f.hwnd,
+      width:         f.width,
+      height:        f.height,
+      format:        f.format,
+      quadCount:     quads.length,
+      recenterEpoch: f.recenterEpoch,
+      reserved2:     0,
     });
 
     for (let i = 0; i < quads.length; i++) {

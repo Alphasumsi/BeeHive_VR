@@ -217,6 +217,18 @@ void main(uint2 tid : SV_DispatchThreadID)
             // EnsureSetup is idempotent — it keeps trying every frame until
             // Electron has populated the FrameSlot and our swapchain is built.
             if (EnsureSetup()) {
+                // B7 (5.6.2026): Recenter-Trigger aus Electron. Atlas inkrementiert
+                // recenterEpoch pro WPF-Recenter-Keybind; bei Wechsel bauen wir
+                // m_localSpace neu mit aktueller Head-Pose als Offset auf.
+                {
+                    FrameSlot rcProbe{};
+                    if (m_mapView) std::memcpy(&rcProbe, m_mapView, sizeof(rcProbe));
+                    if (rcProbe.recenterEpoch != m_lastSeenRecenterEpoch) {
+                        m_lastSeenRecenterEpoch = rcProbe.recenterEpoch;
+                        ApplyRecenter(frameEndInfo->displayTime);
+                    }
+                }
+
                 if (m_inputInitialized && !m_actionSetsAttached) {
                     XrSessionActionSetsAttachInfo ai{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
                     ai.countActionSets = 1;
@@ -326,7 +338,7 @@ void main(uint2 tid : SV_DispatchThreadID)
       private:
         // FrameSlot + QuadSlot layouts — MUST match app/src/ipc/shared-frame.ts
         // byte-for-byte. Both little-endian (Windows native).
-        struct FrameSlot {              // 40 bytes
+        struct FrameSlot {              // 48 bytes (8-byte aligned wegen uint64_t)
             uint64_t generation;
             uint32_t producerPid;
             uint32_t placeModeOn;     // Phase 1 (5.6.2026): 0=Trigger gesperrt, 1=arbeitet. War: reserved.
@@ -335,8 +347,10 @@ void main(uint2 tid : SV_DispatchThreadID)
             uint32_t height;
             uint32_t format;
             uint32_t quadCount;
+            uint32_t recenterEpoch;   // B7 (5.6.2026): monoton steigend, Atlas inkrementiert pro WPF-Recenter.
+            uint32_t reserved2;       // explizites Padding damit Size=48 deterministisch matched (vs. implizites Compiler-Pad)
         };
-        static_assert(sizeof(FrameSlot) == 40, "FrameSlot must be exactly 40 bytes");
+        static_assert(sizeof(FrameSlot) == 48, "FrameSlot must be exactly 48 bytes");
 
         struct QuadSlot {               // 76 bytes
             char     id[16];
@@ -697,6 +711,14 @@ void main(uint2 tid : SV_DispatchThreadID)
                     m_aimSpace[h] = XR_NULL_HANDLE;
                 }
             }
+            if (m_viewSpace != XR_NULL_HANDLE) {
+                OpenXrApi::xrDestroySpace(m_viewSpace);
+                m_viewSpace = XR_NULL_HANDLE;
+            }
+            if (m_runtimeLocalSpace != XR_NULL_HANDLE) {
+                OpenXrApi::xrDestroySpace(m_runtimeLocalSpace);
+                m_runtimeLocalSpace = XR_NULL_HANDLE;
+            }
             if (m_localSpace != XR_NULL_HANDLE) {
                 OpenXrApi::xrDestroySpace(m_localSpace);
                 m_localSpace = XR_NULL_HANDLE;
@@ -839,6 +861,105 @@ void main(uint2 tid : SV_DispatchThreadID)
 
             m_inputInitialized = true;
             Log("Place: action set + bindings ready (self-attach pending first frame)\n");
+        }
+
+        // B7 (5.6.2026): Reference-Space neu erzeugen, sodass alle Quads
+        // (gespeichert relativ zu m_localSpace) nach dem Swap auf Augenhöhe vor
+        // der aktuellen Blickrichtung erscheinen.
+        //
+        // Drei Subtilitäten — wenn eine fehlt, geht es kaputt (verifiziert via
+        // zwei Test-Iterationen):
+        //   (1) Head-Pose gegen STABILEN Runtime-LOCAL locaten, nicht gegen das
+        //       wandernde m_localSpace. Sonst kommt pro Press nur das Delta seit
+        //       dem letzten Press raus, der neue Space landet wieder ≈ Origin
+        //       → Quads springen zwischen zwei Punkten hin und her.
+        //   (2) Y = 0 statt head.Y. Quad-Y wird beim Place-in-VR in LOCAL-Floor-
+        //       Koordinaten gespeichert (Augenhöhe ~1.7). Head-Y zu kopieren
+        //       würde die Quads auf ~3.4 m hochheben → "versetzt".
+        //   (3) Yaw-Only statt voller Head-Orientation. Pitch/Roll des Kopfs im
+        //       Moment des Drucks würden in den Frame eingebacken → alle Quads
+        //       kippen → "schief".
+        // Beide Helper-Spaces (m_viewSpace, m_runtimeLocalSpace) sind lazy.
+        void ApplyRecenter(XrTime displayTime) {
+            if (m_session == XR_NULL_HANDLE || m_localSpace == XR_NULL_HANDLE) return;
+
+            // m_viewSpace lazy anlegen (XR_REFERENCE_SPACE_TYPE_VIEW = Head-Pose).
+            if (m_viewSpace == XR_NULL_HANDLE) {
+                XrReferenceSpaceCreateInfo vi{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
+                vi.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
+                vi.poseInReferenceSpace.orientation.w = 1.0f;
+                XrResult vr = OpenXrApi::xrCreateReferenceSpace(m_session, &vi, &m_viewSpace);
+                if (XR_FAILED(vr) || m_viewSpace == XR_NULL_HANDLE) {
+                    Log(fmt::format("Recenter: xrCreateReferenceSpace(VIEW) failed res={}\n", (int)vr));
+                    return;
+                }
+            }
+
+            // m_runtimeLocalSpace lazy anlegen — identity-LOCAL als stabile
+            // Locate-Referenz (Subtilität 1, s. Doc oben). Wird NIE neu erzeugt.
+            if (m_runtimeLocalSpace == XR_NULL_HANDLE) {
+                XrReferenceSpaceCreateInfo ri{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
+                ri.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+                ri.poseInReferenceSpace.orientation.w = 1.0f;
+                XrResult rr = OpenXrApi::xrCreateReferenceSpace(m_session, &ri, &m_runtimeLocalSpace);
+                if (XR_FAILED(rr) || m_runtimeLocalSpace == XR_NULL_HANDLE) {
+                    Log(fmt::format("Recenter: xrCreateReferenceSpace(runtime LOCAL) failed res={}\n", (int)rr));
+                    return;
+                }
+            }
+
+            // Aktuelle Head-Pose im stabilen Runtime-LOCAL.
+            XrSpaceLocation viewLoc{XR_TYPE_SPACE_LOCATION};
+            XrResult lr = OpenXrApi::xrLocateSpace(m_viewSpace, m_runtimeLocalSpace, displayTime, &viewLoc);
+            const bool posValid = (viewLoc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
+            const bool oriValid = (viewLoc.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0;
+            if (XR_FAILED(lr) || !posValid || !oriValid) {
+                Log(fmt::format("Recenter: xrLocateSpace failed res={} flags={:#x}\n",
+                                (int)lr, viewLoc.locationFlags));
+                return;
+            }
+
+            // Auf Floor + Yaw projizieren (Subtilitäten 2 + 3, s. Doc oben).
+            // Yaw-Extraktion: standard right-handed, Y-up, -Z forward,
+            // yaw = atan2(2(wy + xz), 1 - 2(x² + y²)).
+            const float qx = viewLoc.pose.orientation.x;
+            const float qy = viewLoc.pose.orientation.y;
+            const float qz = viewLoc.pose.orientation.z;
+            const float qw = viewLoc.pose.orientation.w;
+            const float yaw = std::atan2(2.0f * (qw * qy + qx * qz),
+                                         1.0f - 2.0f * (qx * qx + qy * qy));
+            const float halfYaw = yaw * 0.5f;
+
+            XrPosef recenterPose{};
+            recenterPose.position.x = viewLoc.pose.position.x;
+            recenterPose.position.y = 0.0f;
+            recenterPose.position.z = viewLoc.pose.position.z;
+            recenterPose.orientation.x = 0.0f;
+            recenterPose.orientation.y = std::sin(halfYaw);
+            recenterPose.orientation.z = 0.0f;
+            recenterPose.orientation.w = std::cos(halfYaw);
+
+            // Neuen LOCAL-Space mit der yaw-/floor-projizierten Pose erzeugen.
+            XrReferenceSpaceCreateInfo rsi{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
+            rsi.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+            rsi.poseInReferenceSpace = recenterPose;
+            XrSpace newLocal = XR_NULL_HANDLE;
+            XrResult cr = OpenXrApi::xrCreateReferenceSpace(m_session, &rsi, &newLocal);
+            if (XR_FAILED(cr) || newLocal == XR_NULL_HANDLE) {
+                Log(fmt::format("Recenter: xrCreateReferenceSpace(LOCAL) failed res={}\n", (int)cr));
+                return;
+            }
+
+            XrSpace oldLocal = m_localSpace;
+            m_localSpace = newLocal;
+            OpenXrApi::xrDestroySpace(oldLocal);
+
+            Log(fmt::format("Recenter: epoch={} head=({:.2f},{:.2f},{:.2f}) yaw={:.1f}deg "
+                            "→ origin=({:.2f},0.00,{:.2f}) yaw-only\n",
+                            m_lastSeenRecenterEpoch,
+                            viewLoc.pose.position.x, viewLoc.pose.position.y, viewLoc.pose.position.z,
+                            yaw * 57.29578f,
+                            recenterPose.position.x, recenterPose.position.z));
         }
 
         void EnsureActionSpaces() {
@@ -1556,7 +1677,11 @@ void main(uint2 tid : SV_DispatchThreadID)
         UINT m_texWidth{0};
         UINT m_texHeight{0};
         DXGI_FORMAT m_texFormat{DXGI_FORMAT_UNKNOWN};
-        XrSpace m_localSpace{XR_NULL_HANDLE};
+        XrSpace m_localSpace{XR_NULL_HANDLE};         // wandert mit jedem Recenter
+        XrSpace m_viewSpace{XR_NULL_HANDLE};          // B7: head-pose source, lazy
+        XrSpace m_runtimeLocalSpace{XR_NULL_HANDLE};  // B7: stabiler identity-LOCAL für
+                                                       // Recenter-Locate (s. ApplyRecenter-Doc)
+        uint32_t m_lastSeenRecenterEpoch{0};          // B7: gespiegelt aus FrameSlot.recenterEpoch
         XrSwapchain m_swapchain{XR_NULL_HANDLE};
         std::vector<ID3D11Texture2D*> m_swapchainTextures; // runtime-owned
 

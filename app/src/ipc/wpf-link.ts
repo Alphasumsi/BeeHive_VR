@@ -132,6 +132,12 @@ class WpfLink extends EventEmitter {
         // wird in Phase 2 mit Halo + Aim verarbeitet).
         this.emit('placeMode', { on: !!msg.on, id: msg.id });
         break;
+      case 'recenter':
+        // B7 (5.6.2026): WPF-Keybind hat Recenter ausgelöst. main.ts erhöht
+        // FrameSlot.recenterEpoch + republished; Layer reagiert beim
+        // nächsten xrEndFrame mit Reference-Space-Neuaufbau.
+        this.emit('recenter');
+        break;
       default:
         // Unknown message types are fine — just ignored. Old WPF still sends
         // setLayout/recenter/etc., which we'll wire up incrementally.

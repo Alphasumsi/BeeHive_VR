@@ -256,6 +256,11 @@ const currentRectWishById = new Map<string, { w: number; h: number }>();
 // gespiegelt; Layer liest FrameSlot.placeModeOn (uint32, war reserved).
 let currentPlaceModeOn = false;
 
+// B7 (5.6.2026): monoton steigender Counter. Atlas inkrementiert pro WPF-
+// Recenter-Trigger, Layer reagiert beim Wechsel mit Reference-Space-
+// Neuaufbau. uint32 → wraparound bei 4 Mrd Klicks ist irrelevant.
+let currentRecenterEpoch = 0;
+
 let currentHwnd = 0n;
 let atlasWindow: BrowserWindow | null = null;
 
@@ -268,11 +273,12 @@ let atlasPageReady = false;
 function republish(): void {
   if (currentHwnd === 0n) return;
   const payload: FramePublish = {
-    hwnd:        currentHwnd,
-    width:       atlasWidth,
-    height:      atlasHeight,
-    format:      ATLAS_FORMAT_DXGI,
-    placeModeOn: currentPlaceModeOn,
+    hwnd:          currentHwnd,
+    width:         atlasWidth,
+    height:        atlasHeight,
+    format:        ATLAS_FORMAT_DXGI,
+    placeModeOn:   currentPlaceModeOn,
+    recenterEpoch: currentRecenterEpoch,
   };
   sharedFrame.publishAtlas(payload, currentLayout);
 }
@@ -734,6 +740,14 @@ app.whenReady().then(() => {
       atlasLog(`[placeMode] ${m.on ? 'ON' : 'OFF'}${m.id ? ` id=${m.id}` : ''}`);
       republish();
     }
+  });
+  // B7 (5.6.2026): Recenter-Request aus WPF. Counter +1 → republish → Layer
+  // sieht im nächsten xrEndFrame ein anderes recenterEpoch und baut den
+  // Reference-Space neu auf.
+  wpfLink.on('recenter', () => {
+    currentRecenterEpoch = (currentRecenterEpoch + 1) >>> 0;
+    atlasLog(`[recenter] epoch=${currentRecenterEpoch}`);
+    republish();
   });
   wpfLink.start();
 
