@@ -227,17 +227,42 @@ void main(uint2 tid : SV_DispatchThreadID)
                 }
 
                 bool inputSynced = false;
+                XrResult syncRes = XR_SUCCESS;
                 if (m_actionSetsAttached && m_inputInitialized) {
                     EnsureActionSpaces();
                     XrActiveActionSet aas{m_inputActionSet, XR_NULL_PATH};
                     XrActionsSyncInfo syncInfo{XR_TYPE_ACTIONS_SYNC_INFO};
                     syncInfo.countActiveActionSets = 1;
                     syncInfo.activeActionSets = &aas;
-                    inputSynced =
-                        OpenXrApi::xrSyncActions(session, &syncInfo) == XR_SUCCESS;
+                    syncRes = OpenXrApi::xrSyncActions(session, &syncInfo);
+                    inputSynced = syncRes == XR_SUCCESS;
+                }
+                // Diagnose (5.6.2026): logge die ersten paar Sync-Ergebnisse damit
+                // wir sehen ob xrSyncActions wirklich XR_SUCCESS liefert (sonst
+                // erreicht der Mode-Edge-Check in DrivePlaceMode nie das Log).
+                if (!m_loggedFirstSync && m_actionSetsAttached) {
+                    m_loggedFirstSync = true;
+                    Log(fmt::format("Place: first xrSyncActions res={} inputSynced={}\n",
+                                    (int)syncRes, inputSynced));
+                }
+                m_lastSyncRes = syncRes;
+                // Pulse alle 900 Frames (~10s nach Holdoff), wenn Drive einmal lief.
+                // Zeigt ob xrSyncActions plötzlich != XR_SUCCESS wird (z.B. wenn
+                // iRacing den Focus verliert), placeModeOn im SHM richtig
+                // ankommt, und welche Hand-Indices der Layer sieht.
+                if (m_loggedFirstDrive && (m_frameCount % 900 == 0) && m_frameCount > 0) {
+                    FrameSlot tmp{};
+                    if (m_mapView) std::memcpy(&tmp, m_mapView, sizeof(tmp));
+                    Log(fmt::format("Place: pulse f={} syncRes={} placeModeOn={} modeLast={} hovH={} grbH={}\n",
+                                    m_frameCount, (int)m_lastSyncRes, tmp.placeModeOn,
+                                    m_placeModeOnLast ? 1 : 0, m_hoveredHand, m_grabHand));
                 }
 
                 if (inputSynced) {
+                    if (!m_loggedFirstDrive) {
+                        m_loggedFirstDrive = true;
+                        Log("Place: DrivePlaceMode entered (first time)\n");
+                    }
                     DrivePlaceMode(session, frameEndInfo->displayTime);
                 }
 
@@ -333,6 +358,11 @@ void main(uint2 tid : SV_DispatchThreadID)
         // ~half a second at 90 Hz — covers iRacing's loading-screen window
         // without noticeably delaying the appearance of the overlay in-cockpit.
         static constexpr uint64_t kSetupHoldoffFrames = 45;
+
+        // Phase 3 (5.6.2026): Sticker/Pille erscheinen erst nach 150 ms
+        // stabilem Hover. Sofortiges Verschwinden bei Aim-weg (delay-in,
+        // immediate-out). XrTime ist Nanosekunden — 150 ms = 1.5e8 ns.
+        static constexpr int64_t kHoverStableNs = 150LL * 1000LL * 1000LL;
 
         // PlaceOut layout: 8 (generation) + 16 (id) + 7*4 (floats) = 52, padded
         // to 96 for headroom (future opacity / source-id / flag fields).
@@ -694,8 +724,14 @@ void main(uint2 tid : SV_DispatchThreadID)
             m_loggedHoldoff = false;
             m_loggedFirstQuads = false;
             m_placeModeOnLast = false;
+            m_loggedFirstSync = false;
+            m_loggedFirstDrive = false;
             std::memset(m_hoveredId, 0, 16);
             m_hoveredHand = -1;
+            std::memset(m_hoverTrackingId, 0, 16);
+            m_hoverEnteredTime = 0;
+            std::memset(m_lastStableHoveredId, 0, 16);
+            std::memset(m_publishedHoverField, 0, 16);
             // Chroma-Pipeline (C4): ComPtrs lassen die D3D-Objekte beim Reset
             // sauber los — m_chromaSourceCachedPtr ist raw, nur als Cache-Key.
             m_chromaShader.Reset();
@@ -852,6 +888,16 @@ void main(uint2 tid : SV_DispatchThreadID)
                     std::memset(m_hoveredId, 0, 16);
                     m_hoveredHand = -1;
                 }
+                // Phase 3: Hover-Tracking + Stable-Cache resetten. Wenn vorher
+                // ein hover ans Atlas/WPF veröffentlicht war, jetzt leer publishen
+                // damit Sticker + Pille sofort verschwinden.
+                std::memset(m_hoverTrackingId, 0, 16);
+                m_hoverEnteredTime = 0;
+                std::memset(m_lastStableHoveredId, 0, 16);
+                char zero[16] = {};
+                if (std::memcmp(zero, m_publishedHoverField, 16) != 0) {
+                    PublishPlaceOut();
+                }
                 return;
             }
 
@@ -1004,6 +1050,32 @@ void main(uint2 tid : SV_DispatchThreadID)
                 m_hoveredHand = -1;
             }
 
+            // Phase 3: Throttle. Bei jedem Wechsel der gehoveretem Id Timer
+            // resetten; nach 150 ms stabilem Hover wird die Id in
+            // m_lastStableHoveredId hochgehoben — sofortiger Verlust (Aim weg)
+            // beim Hover-Clear. PublishPlaceOut nur bei Edge im
+            // tatsächlich-veröffentlichten Feld.
+            if (std::memcmp(m_hoveredId, m_hoverTrackingId, 16) != 0) {
+                std::memcpy(m_hoverTrackingId, m_hoveredId, 16);
+                m_hoverEnteredTime = displayTime;
+            }
+            const bool hoverStable = m_hoveredHand != -1
+                && m_hoverEnteredTime != 0
+                && (displayTime - m_hoverEnteredTime) >= kHoverStableNs;
+            char stableTarget[16] = {};
+            if (hoverStable) std::memcpy(stableTarget, m_hoveredId, 16);
+            if (std::memcmp(stableTarget, m_lastStableHoveredId, 16) != 0) {
+                std::memcpy(m_lastStableHoveredId, stableTarget, 16);
+            }
+            // Edge-Publish: nur wenn der zu schreibende Wert sich vom letzten
+            // PublishPlaceOut unterscheidet. Spart pro Frame einen SHM-Write.
+            char wouldWrite[16] = {};
+            // Identische Logik wie in PublishPlaceOut für den Hover-Field.
+            std::memcpy(wouldWrite, m_lastStableHoveredId, 16);
+            if (std::memcmp(wouldWrite, m_publishedHoverField, 16) != 0) {
+                PublishPlaceOut();
+            }
+
             // (2) Trigger: nur grabben wenn die Trigger-Hand auch die Hover-
             //     Hand ist (sonst nimmt ein versehentlicher anderer-Hand-Press
             //     den falschen Quad). Ohne Hover-State → kein Grab.
@@ -1046,11 +1118,20 @@ void main(uint2 tid : SV_DispatchThreadID)
             std::memcpy(p + 0,  &m_placeOutGen, 8);
             std::memcpy(p + 8,  m_grabTargetId, 16);
             // 8 floats — Opacity (B10 ALT-Drag) am Ende. Buffer ist 96 Byte,
-            // 24 + 8*4 = 56 verbraucht, 40 Padding bleibt.
+            // 24 + 8*4 = 56 verbraucht. Bis Phase 3: 40 Byte padding.
             float f[8] = { m_dragPosX, m_dragPosY, m_dragPosZ,
                            m_dragYawDeg, m_dragPitchDeg, m_dragSizeW, m_dragSizeH,
                            m_dragOpacity };
             std::memcpy(p + 24, f, sizeof(f));
+            // Phase 3 (5.6.2026): hoveredId an Offset 56 (16 byte) — bei
+            // aktivem Grab automatisch der grabbed-Id; sonst der stabilisierte
+            // Hover (oder leer). Atlas + WPF lesen das für Sticker bzw.
+            // Source-Listen-Highlight. Padding shrinkt von 40 auf 24 Byte.
+            char hover[16] = {};
+            if (m_grabHand != -1) std::memcpy(hover, m_grabTargetId, 16);
+            else                  std::memcpy(hover, m_lastStableHoveredId, 16);
+            std::memcpy(p + 56, hover, 16);
+            std::memcpy(m_publishedHoverField, hover, 16);
         }
 
         // Vec3 helpers — minimal, inline.
@@ -1242,6 +1323,10 @@ void main(uint2 tid : SV_DispatchThreadID)
                     // Phase 2 (5.6.2026): Border-Highlight pro Quad.
                     // - Grabbed (= aktiv gedragt) → cyan, 4 px
                     // - Hovered (= Aim trifft, kein Grab) → weiß, 2 px
+                    // - Place-Mode ON (5.6.2026 v2): grüner 2 px auf allen Quads
+                    //   als „bereit für Trigger"-Indikator. User-Feedback statt
+                    //   Raten ob OpenXR-Session focused ist (xrSyncActions
+                    //   liefert in iRacing-Loading-Screen still NOT_FOCUSED).
                     // - Sonst → off. HLSL zeichnet einen Rahmen am Rect-
                     //   Rand wenn HighlightOn > 0.5 (Compute-Pfad in
                     //   kChromaKeyHlsl Z. 81-88).
@@ -1249,9 +1334,13 @@ void main(uint2 tid : SV_DispatchThreadID)
                         && std::memcmp(s.id, m_grabTargetId, 16) == 0;
                     const bool isHovered = !isGrabbed && m_hoveredHand != -1
                         && std::memcmp(s.id, m_hoveredId, 16) == 0;
+                    const bool isPlaceModeOn = frame.placeModeOn != 0;
                     if (isGrabbed) {
+                        // 5.6.2026 v3: 3 px (war 4 px) — Stufung 1/2/3 zwischen
+                        // Mode-On/Hover/Grab bleibt erkennbar ohne dass der
+                        // Grab-Border das Widget zu sehr einquetscht.
                         cb->highlightOn = 1.0f;
-                        cb->borderPx    = 4.0f;
+                        cb->borderPx    = 3.0f;
                         cb->highlightColor[0] = 0.0f;
                         cb->highlightColor[1] = 1.0f;
                         cb->highlightColor[2] = 1.0f;
@@ -1261,6 +1350,16 @@ void main(uint2 tid : SV_DispatchThreadID)
                         cb->highlightColor[0] = 1.0f;
                         cb->highlightColor[1] = 1.0f;
                         cb->highlightColor[2] = 1.0f;
+                    } else if (isPlaceModeOn) {
+                        // 5.6.2026 v3: 1 px (war 2 px) + gedämpftes Grün
+                        // (0,0.55,0 statt 0,1,0). Indikator dass Place-Mode
+                        // aktiv ist soll dezent bleiben, sonst lenken alle
+                        // leuchtenden Quads beim Setup zu stark ab.
+                        cb->highlightOn = 1.0f;
+                        cb->borderPx    = 1.0f;
+                        cb->highlightColor[0] = 0.0f;
+                        cb->highlightColor[1] = 0.55f;
+                        cb->highlightColor[2] = 0.0f;
                     } else {
                         cb->highlightOn = 0.0f;
                         cb->borderPx    = 0.0f;
@@ -1428,10 +1527,29 @@ void main(uint2 tid : SV_DispatchThreadID)
         bool m_loggedFirstQuads{false};
         // Phase 1: edge-detection für „Place mode ON/OFF" Log-Zeile.
         bool m_placeModeOnLast{false};
+        // Diagnose 5.6.2026: einmalige Marker damit wir sehen ob xrSyncActions
+        // succeed't und DrivePlaceMode überhaupt aufgerufen wird. Plus Pulse-
+        // State alle 900 Frames in xrEndFrame.
+        bool m_loggedFirstSync{false};
+        bool m_loggedFirstDrive{false};
+        XrResult m_lastSyncRes{XR_SUCCESS};
         // Phase 2 (5.6.2026): Hover-State pro Aim-Frame. m_hoveredId leer
         // (alle 16 bytes NUL) heißt „kein Quad gehovered, Trigger zwecklos".
         char m_hoveredId[16]{};
         int  m_hoveredHand{-1};
+        // Phase 3 (5.6.2026): Hover-Throttle für Sticker/Pille — Atlas und WPF
+        // bekommen die Id erst wenn der Aim 150 ms stabil auf demselben Quad
+        // liegt. Verhindert flackernde Anzeige beim Aim-Wandern.
+        // - m_hoverTrackingId: welche Id der Timer gerade verfolgt
+        // - m_hoverEnteredTime: XrTime (ns) Beginn dieser Verfolgung
+        // - m_lastStableHoveredId: stabilisierter Wert (oder leer); was
+        //   PublishPlaceOut ins SHM-Feld an Offset 56 schreibt
+        // - m_publishedHoverField: cache des zuletzt veröffentlichten Werts
+        //   für Edge-Detection (publish nur bei Wechsel).
+        char    m_hoverTrackingId[16]{};
+        XrTime  m_hoverEnteredTime{0};
+        char    m_lastStableHoveredId[16]{};
+        char    m_publishedHoverField[16]{};
         // C3b: edge-triggered log marker für drop-Counter bei out-of-range rects.
         // Verhindert pro-Frame-Spam wenn Race länger dauert als ein einzelner Frame.
         uint32_t m_lastSkippedOutOfRange{0};

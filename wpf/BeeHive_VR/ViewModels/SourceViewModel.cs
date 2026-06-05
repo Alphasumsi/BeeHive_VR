@@ -48,6 +48,11 @@ public partial class SourceViewModel : ObservableObject
     /// Source-Karte. Nicht persistiert.</summary>
     [ObservableProperty] private bool _isPlacing = false;
 
+    /// <summary>Phase 3 (5.6.2026): true wenn der Layer-Aim auf dieser Source
+    /// stabilisiert ist (Hover ≥ 150 ms) ODER aktuell gegrabbt wird. UI-State
+    /// für die Source-Listen-Pille (Highlight), nicht persistiert.</summary>
+    [ObservableProperty] private bool _isHighlighted = false;
+
     // Engine-Match-Status (UI-State, nicht persistiert).
     // null = kein Status (Layout nicht aktiv), true = gecaptured, false = nicht gefunden.
     [ObservableProperty] private bool? _isMatched;

@@ -109,7 +109,7 @@ const DEFAULT_RECT_W   = 512;
 const DEFAULT_RECT_H   = 384;
 // BrowserWindow-Mindest-Größe (Chromium mag keine 0×0).
 const MIN_ATLAS_DIM    = 16;
-// Sicherheits-Streifen zwischen Quads + zum Atlas-Rand (5.6.2026).
+// Phase 3 (5.6.2026): Sicherheits-Streifen zwischen Quads + zum Atlas-Rand.
 // OpenXR-Compositor sampelt bilinear an der Quad-Grenze und kann Border-Pixel
 // vom Nachbar-Quad einlesen → weißer Bleed auf der falschen Seite. Mit
 // transparenten Gap-Pixeln zwischen den Rects bekommt der Sampler höchstens
@@ -126,6 +126,15 @@ const currentLayout: QuadDesc[] = [];
 // Map wie vor C3b ist obsolet, weil der Packer pro Re-Pack neue Slots zuweist
 // und es keinen stabilen "p1/p2/p3"-Pool mehr gibt.
 const slotTargetById = new Map<string, string>();
+
+// Phase 3 (5.6.2026): User-vergebener Source-Name pro Quad (z.B. „Relative
+// Dashie"). syncIframes rendert ihn als Sticker am Quad; Sichtbarkeit toggle
+// über currentHoveredId-Klasse.
+const slotNameById = new Map<string, string>();
+
+// Phase 3: aktuell gehoveretem/grabbed-Id aus dem Layer (kommt via PlaceOut).
+// Triggert syncIframes-Update damit Sticker an/aus geht.
+let currentHoveredId = '';
 
 // Throttle-Snapshot: was wurde zuletzt ans DOM gepusht? Verhindert dass jeder
 // Place-in-VR-Frame (60 Hz) den executeJavaScript-Roundtrip macht.
@@ -256,6 +265,9 @@ function applyWpfLayout(quads: AtlasQuadFromWpf[]): void {
     for (const id of Array.from(slotTargetById.keys())) {
       if (!quads.some(q => q.id === id)) slotTargetById.delete(id);
     }
+    for (const id of Array.from(slotNameById.keys())) {
+      if (!quads.some(q => q.id === id)) slotNameById.delete(id);
+    }
   } else {
     // Pose-Only-Update: currentLayout in der Größe stabil, nur Pose/Vis-Felder
     // gleich unten geupdated. Atlas-Window-Größe unverändert → kein republish-
@@ -273,6 +285,7 @@ function applyWpfLayout(quads: AtlasQuadFromWpf[]): void {
     slot.visible = q.visible;
     slot.opacity = q.opacity ?? 1.0;
     if (q.target) slotTargetById.set(q.id, q.target);
+    if (q.name)   slotNameById.set(q.id, q.name);
   }
 
   console.log(`[main] WPF layout applied: ${quads.length} quad(s), live=${currentLayout.length}, repack=${repack}`);
@@ -298,26 +311,33 @@ function syncIframes(): void {
     return;
   }
 
-  interface IframeSpec { domId: string; rectX: number; rectY: number; rectW: number; rectH: number; url: string; }
+  interface IframeSpec {
+    domId: string; rectX: number; rectY: number; rectW: number; rectH: number;
+    url: string; name: string; isActive: boolean;
+  }
   const specs: IframeSpec[] = [];
   for (const slot of currentLayout) {
     const url = slotTargetById.get(slot.id) ?? 'about:blank';
+    const name = slotNameById.get(slot.id) ?? '';
     specs.push({
       domId: sourceIdToDomId(slot.id),
       rectX: slot.rectX, rectY: slot.rectY, rectW: slot.rectW, rectH: slot.rectH,
-      url,
+      url, name,
+      isActive: slot.id === currentHoveredId,
     });
   }
-  // DOM-Key: ändert sich bei Add/Remove/Resize/URL-Wechsel; bleibt stabil
+  // DOM-Key: ändert sich bei Add/Remove/Resize/URL-Wechsel UND bei
+  // Hover-Toggle (Sticker an/aus) UND bei Namenswechsel; bleibt stabil
   // wenn nur Pose im Layer mutiert.
   const key = specs
-    .map(s => `${s.domId}@${s.rectX},${s.rectY},${s.rectW},${s.rectH}=${s.url}`)
+    .map(s => `${s.domId}@${s.rectX},${s.rectY},${s.rectW},${s.rectH}=${s.url}|${s.name}|${s.isActive ? 'A' : '-'}`)
     .sort()
-    .join('|');
+    .join('||');
   if (key === lastSyncedDomKey) return;
 
   // Reconciler-JS: bekommt die Spec-Liste, löscht .panel die nicht mehr drin
-  // sind, legt fehlende an, updated style + src der bestehenden.
+  // sind, legt fehlende an, updated style + src + Sticker-State der
+  // bestehenden.
   const specsJson = JSON.stringify(specs);
   const js = `(function(specs){
     var root = document.getElementById('atlas-root');
@@ -338,6 +358,9 @@ function syncIframes(): void {
         panel.id = s.domId;
         var f = document.createElement('iframe');
         panel.appendChild(f);
+        var sticker = document.createElement('span');
+        sticker.className = 'sticker';
+        panel.appendChild(sticker);
         root.appendChild(panel);
       }
       panel.style.left   = s.rectX + 'px';
@@ -346,6 +369,11 @@ function syncIframes(): void {
       panel.style.height = s.rectH + 'px';
       var frame = panel.querySelector('iframe');
       if (frame && frame.src !== s.url) frame.src = s.url;
+      var sticker2 = panel.querySelector('.sticker');
+      if (sticker2) {
+        if (sticker2.textContent !== s.name) sticker2.textContent = s.name;
+        sticker2.className = s.isActive ? 'sticker is-active' : 'sticker';
+      }
     }
   })(${specsJson});`;
 
@@ -484,22 +512,32 @@ app.whenReady().then(() => {
   // mapping only exists once iRacing is running and the layer is past its
   // setup-holdoff, so the reader just polls quietly until then.
   placeOut.on('placeUpdate', (u: PlaceUpdate) => {
+    // Phase 3 (5.6.2026): Hover/Grab-Id lokal mitlesen + an Atlas-Sticker
+    // weiterreichen. Wechsel triggert syncIframes (nur DOM-Update wenn key
+    // sich ändert — kein Spam).
+    if (u.hoveredId !== currentHoveredId) {
+      currentHoveredId = u.hoveredId;
+      atlasLog(`[hoveredId] "${u.hoveredId}"`);
+      syncIframes();
+    }
     // JSON keys match WPF's EngineLink.PlaceUpdate parser (legacy field names
     // — x/y/z/yaw/pitch/scale/opacity). `scale` carries sizeW; sizeH is
     // implicitly proportional via WPF's aspect handling.
     wpfLink.send({
-      type:    'placeUpdate',
-      id:      u.id,
-      x:       u.posX,
-      y:       u.posY,
-      z:       u.posZ,
-      yaw:     u.yawDeg,
-      pitch:   u.pitchDeg,
-      scale:   u.sizeW,
+      type:      'placeUpdate',
+      id:        u.id,
+      x:         u.posX,
+      y:         u.posY,
+      z:         u.posZ,
+      yaw:       u.yawDeg,
+      pitch:     u.pitchDeg,
+      scale:     u.sizeW,
       // B10: Layer carried opacity jetzt in PlaceOut (ALT-Drag schreibt
       // m_dragOpacity). WPF EngineLink-Parser FOpt erkennt das Feld und
       // setzt src.Opacity → Slider folgt live.
-      opacity: u.opacity,
+      opacity:   u.opacity,
+      // Phase 3: stabilisierte Hover/Grab-Id für WPF-Pille-Highlight.
+      hoveredId: u.hoveredId,
     });
   });
   placeOut.start();

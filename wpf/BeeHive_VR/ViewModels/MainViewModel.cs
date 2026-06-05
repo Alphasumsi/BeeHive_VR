@@ -806,6 +806,8 @@ public partial class MainViewModel : ObservableObject
                 // Preview im browser-host nutzt, damit HMD-Render scharf ist.
                 RectW   = s.PixelWidth  > 0 ? s.PixelWidth  : DefaultRectW,
                 RectH   = s.PixelHeight > 0 ? s.PixelHeight : DefaultRectH,
+                // Phase 3 (5.6.2026): User-Name für den Sticker am Quad.
+                Name    = s.Name,
             };
         }
     }
@@ -1243,8 +1245,41 @@ public partial class MainViewModel : ObservableObject
 
     // --- Place-in-VR (Häppchen 4): Engine → SourceVM → JSON + UI ----------
 
+    // Phase 3 (5.6.2026 v2): letzte gegrabbte Source-Id für die Listen-Pille.
+    // Hover allein triggert die Pille NICHT (flackrig + nicht abwählbar) — nur
+    // tatsächlicher Grab durch Trigger-Press. Persistent bis Mode-OFF oder
+    // bis nächster Grab eine andere Source aktiviert.
+    private string _lastGrabbedId = "";
+
+    private void UpdateSourceHighlight(string id, bool on)
+    {
+        if (string.IsNullOrEmpty(id)) return;
+        var src = FindLiveSourceById(id);
+        if (src != null) src.IsHighlighted = on;
+    }
+
+    /// <summary>(5.6.2026 v2) Alle aktuell highlighteten Sources auf false
+    /// setzen. Wird bei Place-Mode-OFF gerufen und beim Switch via WPF.</summary>
+    private void ClearAllSourceHighlights()
+    {
+        var src = FindLiveSourceById(_lastGrabbedId);
+        if (src != null) src.IsHighlighted = false;
+        _lastGrabbedId = "";
+    }
+
     private void OnPlaceUpdate(PlaceUpdate pu)
     {
+        // Phase 3 v2 (5.6.2026): Pille folgt dem GRAB, nicht dem Hover.
+        // pu.Id ist die Target-Id eines aktiven Grabs (oder leer). Bei Wechsel
+        // alte Pille aus, neue an. Leere Id ignorieren — persistent bis Mode-
+        // OFF (Hook in OnPlaceModeChanged) oder bis ein neuer Grab kommt.
+        if (!string.IsNullOrEmpty(pu.Id) && pu.Id != _lastGrabbedId)
+        {
+            UpdateSourceHighlight(_lastGrabbedId, false);
+            UpdateSourceHighlight(pu.Id, true);
+            _lastGrabbedId = pu.Id;
+        }
+
         if (string.IsNullOrEmpty(pu.Id)) return;
         var src = FindLiveSourceById(pu.Id);
         if (src == null) return;
@@ -1354,6 +1389,9 @@ public partial class MainViewModel : ObservableObject
             _suppressEnginePush = false;
             _autoSave.Flush();           // finalen Stand committen
             PushCurrentLayoutToEngine(); // einmal sauber resyncen
+            // Phase 3 v2 (5.6.2026): Place-in-VR aus → Highlight darf nicht
+            // hängen bleiben. User hat seine Auswahl explizit beendet.
+            ClearAllSourceHighlights();
         }
     }
 
@@ -1368,7 +1406,23 @@ public partial class MainViewModel : ObservableObject
         // UI-State (IsExpanded, IsRenaming) nicht speichern
         if (e.PropertyName == nameof(SourceViewModel.IsExpanded) ||
             e.PropertyName == nameof(SourceViewModel.IsRenaming))
+        {
+            // Phase 3 v2 (5.6.2026): Aufklappen einer Source = manuelle Auswahl,
+            // übersteuert den VR-Grab-Highlight. Zuklappen ändert nichts —
+            // persistenter Highlight bleibt bis Place-Mode aus oder andere Karte
+            // aufgeklappt wird.
+            if (e.PropertyName == nameof(SourceViewModel.IsExpanded)
+                && sender is SourceViewModel sv && sv.IsExpanded)
+            {
+                if (_lastGrabbedId != sv.Id)
+                {
+                    UpdateSourceHighlight(_lastGrabbedId, false);
+                    sv.IsHighlighted = true;
+                    _lastGrabbedId = sv.Id;
+                }
+            }
             return;
+        }
 
         if (DebouncedSourceProps.Contains(e.PropertyName))
         {

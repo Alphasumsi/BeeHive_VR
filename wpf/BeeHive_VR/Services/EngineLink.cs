@@ -60,6 +60,13 @@ public sealed class AtlasQuadDto
     /// </summary>
     [JsonPropertyName("rectW")]   public int RectW { get; set; }
     [JsonPropertyName("rectH")]   public int RectH { get; set; }
+
+    /// <summary>
+    /// Phase 3 (5.6.2026): User-vergebener Anzeigename der Source. Atlas zeigt
+    /// ihn als Sticker am Quad sobald der Layer den hoveredId in PlaceOut
+    /// stabilisiert hat (150 ms Throttle).
+    /// </summary>
+    [JsonPropertyName("name")]    public string? Name { get; set; }
 }
 
 public sealed class EngineSourceStatus
@@ -86,6 +93,11 @@ public sealed class PlaceUpdate
     /// implementiert). Wenn null, lässt OnPlaceUpdate die Source-Opacity in
     /// Ruhe — sonst würde jeder Place-in-VR-Drag den Slider auf 0 ziehen.</summary>
     public float? Opacity { get; set; }
+    /// <summary>
+    /// Phase 3 (5.6.2026): stabilisierter Hover oder Grab-Id; leer wenn kein
+    /// Quad aktiv ist. MainViewModel highlightet die zugehörige Source-Pille.
+    /// </summary>
+    public string HoveredId { get; set; } = "";
 }
 
 /// <summary>
@@ -361,6 +373,8 @@ public sealed class EngineLink
                                 Pitch = F("pitch"),
                                 Scale = F("scale"),
                                 Opacity = FOpt("opacity"),
+                                HoveredId = root.TryGetProperty("hoveredId", out var hid)
+                                    ? hid.GetString() ?? "" : "",
                             };
                             // placeUpdate kommt pro Frame während Trigger-Grab — kein Log,
                             // Werte stehen live in den Slidern und in der JSON.

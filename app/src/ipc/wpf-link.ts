@@ -40,6 +40,9 @@ export interface AtlasQuadFromWpf {
   // QuadSlot. 0/undefined → Default 512×384.
   rectW?:   number;
   rectH?:   number;
+  // Phase 3 (5.6.2026): User-vergebener Anzeigename (z.B. „Relative Dashie").
+  // Atlas zeigt ihn als Sticker am Quad bei Hover/Grab.
+  name?:    string;
 }
 
 class WpfLink extends EventEmitter {

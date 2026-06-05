@@ -23,7 +23,9 @@ const GetLastError = kernel32.func('uint32_t __stdcall GetLastError()');
 
 // Byte-for-byte match with the layer's PublishPlaceOut layout (96 bytes).
 // opacity am Ende (B10 ALT-Drag) — Layer schreibt 8 floats statt 7, padding
-// shrinkt entsprechend von 44 auf 40.
+// shrinkt entsprechend von 44 auf 40. Phase 3 (5.6.2026): hoveredId an
+// Offset 56 (16 byte) — stabilisierter Hover oder Grab-Id; leer wenn nichts
+// aktiv. Padding shrinkt damit von 40 auf 24 Byte.
 const PlaceOutStruct = koffi.struct('PlaceOut', {
   generation: 'uint64_t',
   id:         koffi.array('char', 16),
@@ -35,7 +37,8 @@ const PlaceOutStruct = koffi.struct('PlaceOut', {
   sizeW:      'float32',
   sizeH:      'float32',
   opacity:    'float32',
-  padding:    koffi.array('uint8', 40),
+  hoveredId:  koffi.array('char', 16),
+  padding:    koffi.array('uint8', 24),
 });
 
 const FILE_MAP_READ = 0x4;
@@ -58,18 +61,22 @@ interface PlaceOutRaw {
   sizeW:      number;
   sizeH:      number;
   opacity:    number;
+  hoveredId:  string;
 }
 
 export interface PlaceUpdate {
-  id:       string;
-  posX:     number;
-  posY:     number;
-  posZ:     number;
-  yawDeg:   number;
-  pitchDeg: number;
-  sizeW:    number;
-  sizeH:    number;
-  opacity:  number;
+  id:        string;
+  posX:      number;
+  posY:      number;
+  posZ:      number;
+  yawDeg:    number;
+  pitchDeg:  number;
+  sizeW:     number;
+  sizeH:     number;
+  opacity:   number;
+  // Phase 3 (5.6.2026): stabilisierter Hover oder Grab-Id; leer wenn nichts.
+  // Atlas zeigt Sticker, WPF highlightet Source-Pille.
+  hoveredId: string;
 }
 
 class PlaceOutReader extends EventEmitter {
@@ -116,17 +123,19 @@ class PlaceOutReader extends EventEmitter {
     this.lastGen = raw.generation;
 
     // koffi returns the full 16-char window; NUL-truncate to the producer id.
-    const id = raw.id.split(NUL)[0];
+    const id        = raw.id.split(NUL)[0];
+    const hoveredId = raw.hoveredId.split(NUL)[0];
     const u: PlaceUpdate = {
       id,
-      posX:     raw.posX,
-      posY:     raw.posY,
-      posZ:     raw.posZ,
-      yawDeg:   raw.yawDeg,
-      pitchDeg: raw.pitchDeg,
-      sizeW:    raw.sizeW,
-      sizeH:    raw.sizeH,
-      opacity:  raw.opacity,
+      posX:      raw.posX,
+      posY:      raw.posY,
+      posZ:      raw.posZ,
+      yawDeg:    raw.yawDeg,
+      pitchDeg:  raw.pitchDeg,
+      sizeW:     raw.sizeW,
+      sizeH:     raw.sizeH,
+      opacity:   raw.opacity,
+      hoveredId,
     };
     this.emit('placeUpdate', u);
   }

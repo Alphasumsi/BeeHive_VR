@@ -289,6 +289,18 @@
                                             <Setter Property="BorderBrush"
                                                     Value="{StaticResource AccentBorder}"/>
                                         </DataTrigger>
+                                        <!-- Phase 3 (5.6.2026): VR-Hover/Grab → kräftiger Akzent-
+                                             Rahmen + Tab-weite Hintergrundfärbung. Persistent bis ein
+                                             anderer Quad im HMD gehovered wird. Wenn IsHighlighted
+                                             UND IsDragging beide an sind, gewinnt IsDragging weil es
+                                             weiter unten steht (WPF-Trigger-Order). -->
+                                        <DataTrigger Binding="{Binding IsHighlighted}" Value="True">
+                                            <Setter Property="BorderBrush"
+                                                    Value="{StaticResource AccentBorder}"/>
+                                            <Setter Property="BorderThickness" Value="3"/>
+                                            <Setter Property="Background"
+                                                    Value="{StaticResource AccentBg}"/>
+                                        </DataTrigger>
                                         <!-- Drag-Hervorhebung (wie Dashies, amber) -->
                                         <DataTrigger Binding="{Binding IsDragging}" Value="True">
                                             <Setter Property="Opacity" Value="0.45"/>
