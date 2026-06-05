@@ -86,10 +86,25 @@ XrResult __declspec(dllexport) XRAPI_CALL
     CreateDirectoryA(localAppData.string().c_str(), nullptr);
 
     // Start logging to file. Filename = "engine.log" so it sits alongside
-    // future "app.log", "companion.log", etc.
+    // future "app.log", "companion.log", etc. F3 (5.6.2026): bei >3 MB
+    // einmal nach .old rotieren bevor der Stream geöffnet wird — analog
+    // zur Atlas-/WPF-Logger-Politik. Runtime-Rotation in log.cpp deckt
+    // ultra-lange Sessions ab.
     if (!logStream.is_open()) {
-        std::string logFile = (localAppData / "engine.log").string();
-        logStream.open(logFile, std::ios_base::ate);
+        std::filesystem::path logFile = localAppData / "engine.log";
+        try {
+            if (std::filesystem::exists(logFile) &&
+                std::filesystem::file_size(logFile) > (3 * 1024 * 1024)) {
+                std::filesystem::path oldFile = logFile;
+                oldFile += ".old";
+                std::error_code ec;
+                std::filesystem::remove(oldFile, ec);     // .old kann fehlen, OK
+                std::filesystem::rename(logFile, oldFile, ec); // best-effort
+            }
+        } catch (...) {
+            // Logger-Setup darf nie werfen — silent fall-through zu open()
+        }
+        logStream.open(logFile.string(), std::ios_base::ate);
     }
 
     DebugLog("--> xrNegotiateLoaderApiLayerInterface\n");

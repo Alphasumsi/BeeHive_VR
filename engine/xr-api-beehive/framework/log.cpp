@@ -25,7 +25,19 @@
 namespace {
     constexpr uint32_t k_maxLoggedErrors = 100;
     uint32_t g_globalErrorCount = 0;
+
+    // F3 (5.6.2026): Runtime-Rotation analog zu Atlas + WPF — alle N Writes
+    // Größe prüfen, bei >3 MB Stream schließen → rename auf .old → neu öffnen.
+    // Startup-Rotation sitzt in entry.cpp; das hier fängt nur ultra-lange
+    // Sessions oder Log-Flood-Cases.
+    constexpr uint32_t k_logRotateCheckInterval = 200;
+    constexpr uintmax_t k_logMaxBytes = 3 * 1024 * 1024;
+    uint32_t g_writesSinceRotateCheck = 0;
 } // namespace
+
+namespace openxr_api_layer {
+    extern std::filesystem::path localAppData;
+}
 
 namespace openxr_api_layer::log {
     extern std::ofstream logStream;
@@ -39,6 +51,29 @@ namespace openxr_api_layer::log {
 
     namespace {
 
+        // F3 (5.6.2026): falls Log-Datei zu groß, Stream schließen → rename
+        // auf .old → frisch öffnen. Wird alle k_logRotateCheckInterval Writes
+        // gerufen (alle 200 reicht; Layer-Log ist niedrig-Volumen).
+        void RotateLogIfNeeded() {
+            if (!logStream.is_open()) return;
+            std::error_code ec;
+            std::filesystem::path logFile = openxr_api_layer::localAppData / "engine.log";
+            const auto sz = std::filesystem::file_size(logFile, ec);
+            if (ec || sz <= k_logMaxBytes) return;
+            try {
+                logStream.close();
+                std::filesystem::path oldFile = logFile;
+                oldFile += ".old";
+                std::filesystem::remove(oldFile, ec);
+                std::filesystem::rename(logFile, oldFile, ec);
+                logStream.open(logFile.string(), std::ios_base::ate);
+            } catch (...) {
+                // Rotation darf nicht werfen — wenn was schiefgeht, einfach
+                // weiterloggen sobald der Stream wieder offen ist (oder gar
+                // nicht, bis nächster Layer-Restart eingerichtet hat).
+            }
+        }
+
         // Utility logging function.
         void InternalLog(const char* fmt, va_list va) {
             const std::time_t now = std::time(nullptr);
@@ -48,6 +83,10 @@ namespace openxr_api_layer::log {
             vsnprintf_s(buf + offset, sizeof(buf) - offset, _TRUNCATE, fmt, va);
             OutputDebugStringA(buf);
             if (logStream.is_open()) {
+                if (++g_writesSinceRotateCheck >= k_logRotateCheckInterval) {
+                    g_writesSinceRotateCheck = 0;
+                    RotateLogIfNeeded();
+                }
                 logStream << buf;
                 logStream.flush();
             }
