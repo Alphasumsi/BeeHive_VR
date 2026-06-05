@@ -11,7 +11,7 @@
          Embedded-Resource-Keys mit den Namespace-Lookups im Code matchen. -->
     <RootNamespace>BeeHiveVR</RootNamespace>
     <AssemblyName>BeeHiveVR</AssemblyName>
-	<Version>0.8.3</Version>
+	<Version>0.8.5</Version>
 	<ApplicationIcon>Assets\bee_icon_256.ico</ApplicationIcon>
 	<Platforms>AnyCPU;x64</Platforms>
   </PropertyGroup>
