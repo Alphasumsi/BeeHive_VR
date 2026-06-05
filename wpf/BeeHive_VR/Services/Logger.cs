@@ -38,15 +38,21 @@ public static class Logger
     /// in <see cref="AppEdition"/> definiert (Lite nutzt einen eigenen Ordner).</summary>
     public const string AppDataFolderName = AppEdition.DataFolderName;
 
-    /// <summary>Maximale Log-Datei-Größe bevor rotiert wird (5 MB).</summary>
-    private const long MaxLogSizeBytes = 5 * 1024 * 1024;
+    /// <summary>Maximale Log-Datei-Größe bevor rotiert wird (3 MB).</summary>
+    private const long MaxLogSizeBytes = 3 * 1024 * 1024;
 
     /// <summary>Maximale Anzahl Einträge im In-Memory-Buffer.</summary>
     private const int MaxInMemoryEntries = 500;
 
+    /// <summary>Alle N Writes prüft <see cref="Write"/> die Datei-Größe und
+    /// rotiert bei Überschreitung. 50 reicht — auch im verbose-Modus
+    /// liefert das eine Stat-Operation pro paar Sekunden.</summary>
+    private const int RotateCheckInterval = 50;
+
     private static readonly object _sync = new();
     private static readonly string _logFilePath;
     private static bool _initialized;
+    private static int _writesSinceRotateCheck;
 
     /// <summary>Live-Buffer für eine spätere Log-Page in der GUI.</summary>
     public static ObservableCollection<LogEntry> Entries { get; } = new();
@@ -114,6 +120,20 @@ public static class Logger
             {
                 try
                 {
+                    // Runtime-Rotation: alle N Writes Größe prüfen damit lange
+                    // App-Sessions die Datei nicht unbegrenzt wachsen lassen
+                    // (Initialize() rotiert nur beim Start).
+                    if (++_writesSinceRotateCheck >= RotateCheckInterval)
+                    {
+                        _writesSinceRotateCheck = 0;
+                        var info = new FileInfo(_logFilePath);
+                        if (info.Exists && info.Length > MaxLogSizeBytes)
+                        {
+                            var oldPath = _logFilePath + ".old";
+                            if (File.Exists(oldPath)) File.Delete(oldPath);
+                            File.Move(_logFilePath, oldPath);
+                        }
+                    }
                     File.AppendAllText(_logFilePath, entry + Environment.NewLine, Encoding.UTF8);
                 }
                 catch

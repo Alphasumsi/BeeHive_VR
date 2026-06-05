@@ -28,9 +28,22 @@ const ATLAS_LOG_PATH = path.join(
   process.env.LOCALAPPDATA || process.env.APPDATA || '',
   'BeeHive_VR', 'logs', 'atlas.log');
 try { fs.mkdirSync(path.dirname(ATLAS_LOG_PATH), { recursive: true }); } catch { /* ignore */ }
+// 3-MB-Cap mit einmaliger Rotation auf .old. Per-Write-Stat ist akzeptabel
+// — Log-Volume ist im Hundertstel-Sekunden-Bereich, kein Hot-Path.
+const ATLAS_LOG_MAX_BYTES = 3 * 1024 * 1024;
 function atlasLog(msg: string): void {
   const line = `${new Date().toISOString()} ${msg}\n`;
-  try { fs.appendFileSync(ATLAS_LOG_PATH, line); } catch { /* ignore */ }
+  try {
+    try {
+      const stat = fs.statSync(ATLAS_LOG_PATH);
+      if (stat.size + line.length > ATLAS_LOG_MAX_BYTES) {
+        const oldPath = ATLAS_LOG_PATH + '.old';
+        try { fs.unlinkSync(oldPath); } catch { /* nicht vorhanden, OK */ }
+        try { fs.renameSync(ATLAS_LOG_PATH, oldPath); } catch { /* ignore */ }
+      }
+    } catch { /* statSync wirft wenn Datei noch nicht da → erster Write erzeugt sie */ }
+    fs.appendFileSync(ATLAS_LOG_PATH, line);
+  } catch { /* ignore */ }
   console.log(msg);
 }
 import { sharedFrame, tryAcquireSingleInstance, FramePublish, QuadDesc } from './ipc/shared-frame';
