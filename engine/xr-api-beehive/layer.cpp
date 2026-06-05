@@ -304,7 +304,7 @@ void main(uint2 tid : SV_DispatchThreadID)
         struct FrameSlot {              // 40 bytes
             uint64_t generation;
             uint32_t producerPid;
-            uint32_t reserved;
+            uint32_t placeModeOn;     // Phase 1 (5.6.2026): 0=Trigger gesperrt, 1=arbeitet. War: reserved.
             uint64_t hwnd;            // Electron BrowserWindow HWND for WGC
             uint32_t width;
             uint32_t height;
@@ -693,6 +693,9 @@ void main(uint2 tid : SV_DispatchThreadID)
             m_loggedAwaitingFrame = false;
             m_loggedHoldoff = false;
             m_loggedFirstQuads = false;
+            m_placeModeOnLast = false;
+            std::memset(m_hoveredId, 0, 16);
+            m_hoveredHand = -1;
             // Chroma-Pipeline (C4): ComPtrs lassen die D3D-Objekte beim Reset
             // sauber los — m_chromaSourceCachedPtr ist raw, nur als Cache-Key.
             m_chromaShader.Reset();
@@ -826,6 +829,32 @@ void main(uint2 tid : SV_DispatchThreadID)
         // RenderAtlasQuads keeps the visual in sync with the hand without
         // waiting for the Electron round-trip.
         void DrivePlaceMode(XrSession session, XrTime displayTime) {
+            // Phase 1 (5.6.2026): WPF-Toggle gated den gesamten Place-Pfad.
+            // FrameSlot.placeModeOn (Electron-side gemirrored aus
+            // EngineLink.PushPlaceMode) entscheidet ob Trigger überhaupt
+            // gelesen wird. Wenn off mitten im Drag → graceful release damit
+            // der Quad nicht festklebt.
+            FrameSlot modeProbe{};
+            std::memcpy(&modeProbe, m_mapView, sizeof(modeProbe));
+            const bool placeOn = modeProbe.placeModeOn != 0;
+            if (placeOn != m_placeModeOnLast) {
+                Log(fmt::format("Place: mode {}\n", placeOn ? "ON" : "OFF"));
+                m_placeModeOnLast = placeOn;
+            }
+            if (!placeOn) {
+                if (m_grabHand != -1) {
+                    char idLog[17] = {}; std::memcpy(idLog, m_grabTargetId, 16);
+                    Log(fmt::format("Place: released id=\"{}\" (mode off mid-drag)\n", idLog));
+                    m_grabHand = -1;
+                    PublishPlaceOut();
+                }
+                if (m_hoveredHand != -1) {
+                    std::memset(m_hoveredId, 0, 16);
+                    m_hoveredHand = -1;
+                }
+                return;
+            }
+
             auto triggerDown = [&](int h) -> bool {
                 XrActionStateGetInfo gi{XR_TYPE_ACTION_STATE_GET_INFO};
                 gi.action = m_triggerAction;
@@ -940,28 +969,53 @@ void main(uint2 tid : SV_DispatchThreadID)
                 return;
             }
 
-            // --- No grab: closest visible quad on trigger press -------------
+            // --- No active grab: Phase 2 Hover-Resolve + Trigger-an-Hover ---
+            // (1) Hover: für beide Hände Aim-Pose holen, jeden visible Quad
+            //     hit-testen, closest Hit wird m_hoveredId/m_hoveredHand.
+            int hoverHand = -1;
+            int hoverIdx  = -1;
+            float hoverDist = 1e9f;
+            for (int h = 0; h < 2; ++h) {
+                XrVector3f hp{}; XrQuaternionf hq{};
+                if (!ctrlPose(h, hp, hq)) continue;
+                for (uint32_t i = 0; i < n; ++i) {
+                    if (!slots[i].visible) continue;
+                    float t;
+                    if (!HitTestQuad(hp, hq, slots[i], t)) continue;
+                    if (t < hoverDist) {
+                        hoverDist = t; hoverIdx = (int)i; hoverHand = h;
+                    }
+                }
+            }
+            if (hoverIdx >= 0) {
+                if (std::memcmp(m_hoveredId, slots[hoverIdx].id, 16) != 0) {
+                    char idLog[17] = {}; std::memcpy(idLog, slots[hoverIdx].id, 16);
+                    Log(fmt::format("Place: hover id=\"{}\" hand={} dist={:.2f}m\n",
+                                    idLog, hoverHand == 0 ? "L" : "R", hoverDist));
+                    std::memcpy(m_hoveredId, slots[hoverIdx].id, 16);
+                }
+                m_hoveredHand = hoverHand;
+            } else if (m_hoveredHand != -1) {
+                Log("Place: hover cleared\n");
+                std::memset(m_hoveredId, 0, 16);
+                m_hoveredHand = -1;
+            }
+
+            // (2) Trigger: nur grabben wenn die Trigger-Hand auch die Hover-
+            //     Hand ist (sonst nimmt ein versehentlicher anderer-Hand-Press
+            //     den falschen Quad). Ohne Hover-State → kein Grab.
             int trigHand = -1;
             for (int h = 0; h < 2; ++h) if (triggerDown(h)) { trigHand = h; break; }
             if (trigHand < 0) return;
+            if (m_hoveredHand < 0 || trigHand != m_hoveredHand) return;
 
-            XrVector3f hand{};
-            XrQuaternionf handOri{};
-            if (!ctrlPose(trigHand, hand, handOri)) return;
-
-            int bestIdx = -1;
-            float bestD2 = 1e9f;
+            int idx = -1;
             for (uint32_t i = 0; i < n; ++i) {
-                if (!slots[i].visible) continue;
-                const float dx = slots[i].posX - hand.x;
-                const float dy = slots[i].posY - hand.y;
-                const float dz = slots[i].posZ - hand.z;
-                const float d2 = dx*dx + dy*dy + dz*dz;
-                if (d2 < bestD2) { bestD2 = d2; bestIdx = (int)i; }
+                if (std::memcmp(slots[i].id, m_hoveredId, 16) == 0) { idx = (int)i; break; }
             }
-            if (bestIdx < 0) return;
+            if (idx < 0) return;
+            const QuadSlot& s = slots[idx];
 
-            const QuadSlot& s = slots[bestIdx];
             m_grabHand = trigHand;
             std::memcpy(m_grabTargetId, s.id, 16);
             m_grabModifier = -2;                  // forces rebaseline on first drag frame
@@ -973,8 +1027,8 @@ void main(uint2 tid : SV_DispatchThreadID)
             QuatToYawPitchDeg({s.quatX, s.quatY, s.quatZ, s.quatW},
                               m_dragYawDeg, m_dragPitchDeg);
             char idLog[17] = {}; std::memcpy(idLog, m_grabTargetId, 16);
-            Log(fmt::format("Place: grabbed id=\"{}\" hand={} d={:.3f}m\n",
-                            idLog, trigHand == 0 ? "L" : "R", std::sqrt(bestD2)));
+            Log(fmt::format("Place: grabbed id=\"{}\" hand={} aimDist={:.2f}m\n",
+                            idLog, trigHand == 0 ? "L" : "R", hoverDist));
             PublishPlaceOut();
         }
 
@@ -994,6 +1048,68 @@ void main(uint2 tid : SV_DispatchThreadID)
                            m_dragYawDeg, m_dragPitchDeg, m_dragSizeW, m_dragSizeH,
                            m_dragOpacity };
             std::memcpy(p + 24, f, sizeof(f));
+        }
+
+        // Vec3 helpers — minimal, inline.
+        static XrVector3f VecSub(const XrVector3f& a, const XrVector3f& b) {
+            return {a.x - b.x, a.y - b.y, a.z - b.z};
+        }
+        static float VecDot(const XrVector3f& a, const XrVector3f& b) {
+            return a.x*b.x + a.y*b.y + a.z*b.z;
+        }
+        // Rotate vector by unit quaternion: v' = q * v * q*.
+        // Expanded form ohne dynamic alloc.
+        static XrVector3f RotateVec3ByQuat(const XrQuaternionf& q, const XrVector3f& v) {
+            const float x2 = q.x + q.x, y2 = q.y + q.y, z2 = q.z + q.z;
+            const float wx = q.w * x2, wy = q.w * y2, wz = q.w * z2;
+            const float xx = q.x * x2, xy = q.x * y2, xz = q.x * z2;
+            const float yy = q.y * y2, yz = q.y * z2, zz = q.z * z2;
+            return {
+                v.x * (1.f - (yy + zz)) + v.y * (xy - wz)        + v.z * (xz + wy),
+                v.x * (xy + wz)         + v.y * (1.f - (xx + zz)) + v.z * (yz - wx),
+                v.x * (xz - wy)         + v.y * (yz + wx)        + v.z * (1.f - (xx + yy))
+            };
+        }
+        // For unit quats, inverse == conjugate. Used to bring a world-space
+        // point into a quad's local frame for the inside-rect test.
+        static XrQuaternionf ConjugateQuat(const XrQuaternionf& q) {
+            return {-q.x, -q.y, -q.z, q.w};
+        }
+
+        // Phase 2 (5.6.2026): Ray-Plane-Hit-Test gegen einen Quad-Slot.
+        // - Aim-Pose: ctrlPos + ctrlOri, forward = q * (0,0,-1) (OpenXR-Konvention).
+        // - Quad-Plane: pos = slot.pos, normal = quat * (0,0,-1).
+        // - Hit gilt nur wenn t > 0 (vor dem Controller), Strahl nicht parallel
+        //   zur Plane, und Hit-Point in Quad-Local-XY innerhalb sizeW/sizeH.
+        // Returnt true + outDistance bei Hit, sonst false.
+        static bool HitTestQuad(const XrVector3f& ctrlPos, const XrQuaternionf& ctrlOri,
+                                const QuadSlot& slot, float& outDistance) {
+            const XrVector3f forwardLocal{0.f, 0.f, -1.f};
+            const XrVector3f rayDir   = RotateVec3ByQuat(ctrlOri, forwardLocal);
+            const XrQuaternionf quadQ{slot.quatX, slot.quatY, slot.quatZ, slot.quatW};
+            const XrVector3f quadNormal = RotateVec3ByQuat(quadQ, forwardLocal);
+            const XrVector3f quadPos{slot.posX, slot.posY, slot.posZ};
+
+            const float denom = VecDot(rayDir, quadNormal);
+            if (std::fabs(denom) < 1e-5f) return false;  // ray ∥ plane
+
+            const float t = VecDot(VecSub(quadPos, ctrlPos), quadNormal) / denom;
+            if (t <= 0.f) return false;                  // hit behind controller
+
+            const XrVector3f hitWorld{
+                ctrlPos.x + rayDir.x * t,
+                ctrlPos.y + rayDir.y * t,
+                ctrlPos.z + rayDir.z * t};
+            const XrVector3f rel = VecSub(hitWorld, quadPos);
+            const XrVector3f local = RotateVec3ByQuat(ConjugateQuat(quadQ), rel);
+
+            const float halfW = slot.sizeW * 0.5f;
+            const float halfH = slot.sizeH * 0.5f;
+            if (local.x < -halfW || local.x > halfW) return false;
+            if (local.y < -halfH || local.y > halfH) return false;
+
+            outDistance = t;
+            return true;
         }
 
         // Quaternion <-> yaw/pitch helpers. Convention: q = qYaw * qPitch
@@ -1120,13 +1236,37 @@ void main(uint2 tid : SV_DispatchThreadID)
                     cb->rectY          = s.rectY;
                     cb->rectW          = s.rectW;
                     cb->rectH          = s.rectH;
-                    cb->highlightOn    = 0.0f;     // B5 später
-                    cb->borderPx       = 0.0f;
+                    // Phase 2 (5.6.2026): Border-Highlight pro Quad.
+                    // - Grabbed (= aktiv gedragt) → cyan, 4 px
+                    // - Hovered (= Aim trifft, kein Grab) → weiß, 2 px
+                    // - Sonst → off. HLSL zeichnet einen Rahmen am Rect-
+                    //   Rand wenn HighlightOn > 0.5 (Compute-Pfad in
+                    //   kChromaKeyHlsl Z. 81-88).
+                    const bool isGrabbed = m_grabHand != -1
+                        && std::memcmp(s.id, m_grabTargetId, 16) == 0;
+                    const bool isHovered = !isGrabbed && m_hoveredHand != -1
+                        && std::memcmp(s.id, m_hoveredId, 16) == 0;
+                    if (isGrabbed) {
+                        cb->highlightOn = 1.0f;
+                        cb->borderPx    = 4.0f;
+                        cb->highlightColor[0] = 0.0f;
+                        cb->highlightColor[1] = 1.0f;
+                        cb->highlightColor[2] = 1.0f;
+                    } else if (isHovered) {
+                        cb->highlightOn = 1.0f;
+                        cb->borderPx    = 2.0f;
+                        cb->highlightColor[0] = 1.0f;
+                        cb->highlightColor[1] = 1.0f;
+                        cb->highlightColor[2] = 1.0f;
+                    } else {
+                        cb->highlightOn = 0.0f;
+                        cb->borderPx    = 0.0f;
+                        cb->highlightColor[0] = 0.0f;
+                        cb->highlightColor[1] = 0.0f;
+                        cb->highlightColor[2] = 0.0f;
+                    }
                     cb->pad0           = 0.0f;
                     cb->padAlign       = 0.0f;
-                    cb->highlightColor[0] = 0.0f;
-                    cb->highlightColor[1] = 0.0f;
-                    cb->highlightColor[2] = 0.0f;
                     cb->pad1           = 0.0f;
                     m_appContext->Unmap(m_chromaCB.Get(), 0);
 
@@ -1283,6 +1423,12 @@ void main(uint2 tid : SV_DispatchThreadID)
         bool m_loggedAwaitingFrame{false};
         bool m_loggedHoldoff{false};
         bool m_loggedFirstQuads{false};
+        // Phase 1: edge-detection für „Place mode ON/OFF" Log-Zeile.
+        bool m_placeModeOnLast{false};
+        // Phase 2 (5.6.2026): Hover-State pro Aim-Frame. m_hoveredId leer
+        // (alle 16 bytes NUL) heißt „kein Quad gehovered, Trigger zwecklos".
+        char m_hoveredId[16]{};
+        int  m_hoveredHand{-1};
         // C3b: edge-triggered log marker für drop-Counter bei out-of-range rects.
         // Verhindert pro-Frame-Spam wenn Race länger dauert als ein einzelner Frame.
         uint32_t m_lastSkippedOutOfRange{0};

@@ -17,15 +17,19 @@ const HANDLE = koffi.pointer('HANDLE', koffi.opaque());
 
 // FrameSlot — byte-for-byte match with the C++ layer (40 bytes).
 // Describes the atlas source window. The QuadSlot array sits behind it.
+// Phase 1 (5.6.2026): das frühere `reserved` uint32 trägt jetzt placeModeOn
+// (0/1). Byte-Layout unverändert, Layer-static_assert(sizeof(FrameSlot)==40)
+// gilt weiter. WPF toggled über EngineLink.PushPlaceMode → wpf-link emit →
+// main.ts schreibt hier rein → Layer gated DrivePlaceMode darauf.
 const FrameSlot = koffi.struct('FrameSlot', {
   generation:  'uint64_t',
   producerPid: 'uint32_t',
-  reserved:    'uint32_t',
-  hwnd:        'uint64_t',  // BrowserWindow HWND that WGC captures
+  placeModeOn: 'uint32_t',   // 0 = Trigger gesperrt, 1 = Trigger arbeitet (war: reserved)
+  hwnd:        'uint64_t',   // BrowserWindow HWND that WGC captures
   width:       'uint32_t',
   height:      'uint32_t',
   format:      'uint32_t',
-  quadCount:   'uint32_t',  // number of valid entries in the QuadSlot array
+  quadCount:   'uint32_t',   // number of valid entries in the QuadSlot array
 });
 const FRAME_SLOT_SIZE: number = koffi.sizeof(FrameSlot);
 
@@ -88,10 +92,11 @@ const NAME_MAPPING = 'Local\\BeeHiveVR_Frame';
 const NAME_MUTEX   = 'Global\\BeeHiveVR_Instance';
 
 export interface FramePublish {
-  hwnd:     bigint;   // BrowserWindow HWND that the layer will WGC-capture
-  width:    number;   // atlas width in pixels
-  height:   number;   // atlas height in pixels
-  format:   number;   // DXGI_FORMAT advertised to the layer (informational)
+  hwnd:        bigint;   // BrowserWindow HWND that the layer will WGC-capture
+  width:       number;   // atlas width in pixels
+  height:      number;   // atlas height in pixels
+  format:      number;   // DXGI_FORMAT advertised to the layer (informational)
+  placeModeOn: boolean;  // Phase 1: Trigger gated. Layer skipt DrivePlaceMode wenn false.
 }
 
 // One sub-region of the atlas. id is for human debugging only; layer doesn't
@@ -140,7 +145,7 @@ class SharedFrameChannel {
   private zeroAll(): void {
     if (!this.mapView) return;
     koffi.encode(this.mapView, FrameSlot, {
-      generation: 0n, producerPid: 0, reserved: 0,
+      generation: 0n, producerPid: 0, placeModeOn: 0,
       hwnd: 0n, width: 0, height: 0, format: 0, quadCount: 0,
     });
     const empty = {
@@ -166,7 +171,7 @@ class SharedFrameChannel {
     koffi.encode(this.mapView, FrameSlot, {
       generation:  this.generation,
       producerPid: process.pid,
-      reserved:    0,
+      placeModeOn: f.placeModeOn ? 1 : 0,
       hwnd:        f.hwnd,
       width:       f.width,
       height:      f.height,

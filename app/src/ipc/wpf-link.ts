@@ -111,11 +111,17 @@ class WpfLink extends EventEmitter {
     }
   }
 
-  private dispatch(msg: { type?: string; quads?: AtlasQuadFromWpf[] }): void {
+  private dispatch(msg: { type?: string; quads?: AtlasQuadFromWpf[]; on?: boolean; id?: string }): void {
     if (!msg.type) return;
     switch (msg.type) {
       case 'setAtlasLayout':
         if (Array.isArray(msg.quads)) this.emit('atlasLayout', msg.quads);
+        break;
+      case 'placeMode':
+        // Phase 1 (5.6.2026): nur on durchreichen; optional id für später
+        // (Place-Button auf einer Source-Karte fixiert direkt auf die ID,
+        // wird in Phase 2 mit Halo + Aim verarbeitet).
+        this.emit('placeMode', { on: !!msg.on, id: msg.id });
         break;
       default:
         // Unknown message types are fine — just ignored. Old WPF still sends

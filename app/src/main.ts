@@ -130,6 +130,11 @@ let lastSyncedDomKey = '';
 // dürfen die rectX/Y/W/H NICHT anfassen, sonst stretcht der Atlas pro Frame.
 const currentRectWishById = new Map<string, { w: number; h: number }>();
 
+// Phase 1 (5.6.2026): Place-in-VR-Wächter. Default false → Layer ignoriert
+// Controller-Trigger; WPF-Toggle setzt auf true. Wird in jeden FrameSlot
+// gespiegelt; Layer liest FrameSlot.placeModeOn (uint32, war reserved).
+let currentPlaceModeOn = false;
+
 let currentHwnd: bigint = 0n;
 let atlasWindow: BrowserWindow | null = null;
 
@@ -142,10 +147,11 @@ let atlasPageReady = false;
 function republish(): void {
   if (currentHwnd === 0n) return;
   const payload: FramePublish = {
-    hwnd:   currentHwnd,
-    width:  atlasWidth,
-    height: atlasHeight,
-    format: ATLAS_FORMAT_DXGI,
+    hwnd:        currentHwnd,
+    width:       atlasWidth,
+    height:      atlasHeight,
+    format:      ATLAS_FORMAT_DXGI,
+    placeModeOn: currentPlaceModeOn,
   };
   sharedFrame.publishAtlas(payload, currentLayout);
 }
@@ -235,7 +241,7 @@ function applyWpfLayout(quads: AtlasQuadFromWpf[]): void {
     resizeAtlasWindow(atlasW, atlasH);
     atlasLog(`[applyWpfLayout] repack: atlas=${atlasW}x${atlasH} regions=${rects.length}`);
 
-    // (5) URL-Map auf aktuelle Ids reduzieren — verhindert Leak alter Targets.
+    // (5) URL-Map + Name-Map auf aktuelle Ids reduzieren.
     for (const id of Array.from(slotTargetById.keys())) {
       if (!quads.some(q => q.id === id)) slotTargetById.delete(id);
     }
@@ -451,6 +457,15 @@ app.whenReady().then(() => {
   // retry every second until it shows up.
   wpfLink.on('connect', () => { wpfLink.sayHello(); });
   wpfLink.on('atlasLayout', (quads: AtlasQuadFromWpf[]) => applyWpfLayout(quads));
+  // Phase 1: Place-in-VR-Toggle aus WPF. Edge-Log + sofortiger republish
+  // damit der Layer im nächsten xrEndFrame den neuen Flag sieht.
+  wpfLink.on('placeMode', (m: { on: boolean; id?: string }) => {
+    if (m.on !== currentPlaceModeOn) {
+      currentPlaceModeOn = m.on;
+      atlasLog(`[placeMode] ${m.on ? 'ON' : 'OFF'}${m.id ? ` id=${m.id}` : ''}`);
+      republish();
+    }
+  });
   wpfLink.start();
 
   // Place-in-VR: layer publishes pose updates while a controller-grab is
@@ -460,8 +475,7 @@ app.whenReady().then(() => {
   placeOut.on('placeUpdate', (u: PlaceUpdate) => {
     // JSON keys match WPF's EngineLink.PlaceUpdate parser (legacy field names
     // — x/y/z/yaw/pitch/scale/opacity). `scale` carries sizeW; sizeH is
-    // implicitly proportional via WPF's aspect handling. Opacity is not in
-    // QuadSlot yet, send 0 as placeholder so the parser doesn't choke.
+    // implicitly proportional via WPF's aspect handling.
     wpfLink.send({
       type:    'placeUpdate',
       id:      u.id,
