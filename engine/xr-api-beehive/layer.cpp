@@ -297,7 +297,37 @@ void main(uint2 tid : SV_DispatchThreadID)
                         }
                     }
                 }
-                if (currentTex) {
+                // F5 (6.6.2026): Publisher-Liveness vor dem Composen prüfen.
+                // FrameSlot.generation muss innerhalb kWatchdogStaleFrames
+                // bumpen, sonst gilt Atlas als tot → wir composen keine Quads
+                // mehr (eingefrorene Overlays wären visuell schlimmer als
+                // gar keine). Auto-resume sobald generation wieder steigt.
+                bool publisherAlive = true;
+                {
+                    FrameSlot wdProbe{};
+                    if (m_mapView) std::memcpy(&wdProbe, m_mapView, sizeof(wdProbe));
+                    if (wdProbe.generation != m_lastSeenGeneration) {
+                        m_lastSeenGeneration = wdProbe.generation;
+                        m_genStagnantFrames = 0;
+                        if (m_watchdogTripped) {
+                            m_watchdogTripped = false;
+                            Log(fmt::format("Watchdog: publisher resumed (gen={})\n",
+                                            wdProbe.generation));
+                        }
+                    } else {
+                        m_genStagnantFrames++;
+                        if (m_genStagnantFrames > kWatchdogStaleFrames) {
+                            publisherAlive = false;
+                            if (!m_watchdogTripped) {
+                                m_watchdogTripped = true;
+                                Log(fmt::format("Watchdog: publisher stale {} frames (gen={}) — hiding quads\n",
+                                                m_genStagnantFrames, wdProbe.generation));
+                            }
+                        }
+                    }
+                }
+
+                if (currentTex && publisherAlive) {
                     const uint32_t n = RenderAtlasQuads(currentTex, quadStorage.data());
                     for (uint32_t i = 0; i < n; ++i) {
                         layers.push_back(
@@ -372,6 +402,13 @@ void main(uint2 tid : SV_DispatchThreadID)
         // ~half a second at 90 Hz — covers iRacing's loading-screen window
         // without noticeably delaying the appearance of the overlay in-cockpit.
         static constexpr uint64_t kSetupHoldoffFrames = 45;
+
+        // F5 (6.6.2026): nach N Frames ohne FrameSlot.generation-Bump gilt
+        // der Publisher (Atlas-Prozess) als tot/hängt → keine Quads mehr
+        // composen, damit eingefrorene Overlays nicht im VR-Bild stehen
+        // bleiben. Atlas heartbeat-bumpt alle 250 ms; 60 Frames bei 90 Hz
+        // ≈ 0.7 s, bei 60 Hz ≈ 1.0 s. Komfortable Marge gegen Jitter.
+        static constexpr uint64_t kWatchdogStaleFrames = 60;
 
         // Phase 3 (5.6.2026): Sticker/Pille erscheinen erst nach 150 ms
         // stabilem Hover. Sofortiges Verschwinden bei Aim-weg (delay-in,
@@ -1682,6 +1719,13 @@ void main(uint2 tid : SV_DispatchThreadID)
         XrSpace m_runtimeLocalSpace{XR_NULL_HANDLE};  // B7: stabiler identity-LOCAL für
                                                        // Recenter-Locate (s. ApplyRecenter-Doc)
         uint32_t m_lastSeenRecenterEpoch{0};          // B7: gespiegelt aus FrameSlot.recenterEpoch
+        // F5 (6.6.2026): Publisher-Liveness-Watchdog. Atlas heartbeat-bumpt
+        // FrameSlot.generation alle 250 ms. Wenn der Wert >kWatchdogStaleFrames
+        // Frames stehen bleibt, ist Atlas tot/hängt → keine Quads composen.
+        // Auto-resume sobald generation wieder steigt.
+        uint64_t m_lastSeenGeneration{0};
+        uint64_t m_genStagnantFrames{0};
+        bool     m_watchdogTripped{false};            // edge-log marker
         XrSwapchain m_swapchain{XR_NULL_HANDLE};
         std::vector<ID3D11Texture2D*> m_swapchainTextures; // runtime-owned
 

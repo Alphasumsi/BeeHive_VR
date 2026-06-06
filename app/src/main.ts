@@ -731,6 +731,17 @@ app.whenReady().then(() => {
   // WPF pipe — non-blocking. If WPF is not running yet, the client will
   // retry every second until it shows up.
   wpfLink.on('connect', () => { wpfLink.sayHello(); });
+  // F5 (6.6.2026): WPF-Crash/-Exit → Layout leeren und republishen.
+  // FrameSlot.quadCount=0 + Heartbeat-Generation-Bump teilen dem Layer
+  // mit „Publisher noch da, aber keine Quads" → Quads verschwinden sofort
+  // statt eingefroren stehen zu bleiben. Bei WPF-Reconnect kommt der
+  // erste setAtlasLayout sofort und füllt das Layout wieder.
+  wpfLink.on('disconnect', () => {
+    if (currentLayout.length === 0) return; // already empty, nothing to do
+    atlasLog('[wpf-link] disconnect → clearing atlas layout');
+    currentLayout = [];
+    republish();
+  });
   wpfLink.on('atlasLayout', (quads: AtlasQuadFromWpf[]) => applyWpfLayout(quads));
   // Phase 1: Place-in-VR-Toggle aus WPF. Edge-Log + sofortiger republish
   // damit der Layer im nächsten xrEndFrame den neuen Flag sieht.
@@ -750,6 +761,17 @@ app.whenReady().then(() => {
     republish();
   });
   wpfLink.start();
+
+  // F5 (6.6.2026): Heartbeat-Republish. republish() bumpt FrameSlot.generation
+  // pro Aufruf — der Layer benutzt das als Liveness-Signal (siehe Watchdog
+  // in layer.cpp). Ohne Heartbeat würde Atlas im Idle aussehen wie Atlas-tot,
+  // weil regulärer republish() nur bei State-Change feuert. 250 ms ist
+  // großzügig genug damit Layer-Threshold (≈60 Frames bei 90 Hz ≈ 0.7 s)
+  // mit Sicherheits-Marge greift, klein genug damit Quads bei Atlas-Crash
+  // innerhalb von ~1 s verschwinden.
+  setInterval(() => {
+    if (currentHwnd !== 0n) republish();
+  }, 250);
 
   // Place-in-VR: layer publishes pose updates while a controller-grab is
   // active; we forward each generation to WPF over the existing pipe. The

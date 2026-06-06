@@ -93,6 +93,11 @@ class WpfLink extends EventEmitter {
     s.on('close', () => {
       this.socket = null;
       this.buf = Buffer.alloc(0);
+      // F5: WPF-Lebenszeichen weg. main.ts hört darauf, leert das Layout
+      // und republished mit quadCount=0 → Layer rendert keine Quads mehr
+      // (statt sie auf dem letzten Stand einzufrieren). Auch wenn WPF noch
+      // nicht da WAR: zweite Disconnect-Emission ohne Effekt im Handler ok.
+      this.emit('disconnect');
       if (this.stopped) return;
       setTimeout(() => this.connect(), RECONNECT_MS);
     });
