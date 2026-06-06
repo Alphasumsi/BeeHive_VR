@@ -125,7 +125,7 @@ class WpfLink extends EventEmitter {
     }
   }
 
-  private dispatch(msg: { type?: string; quads?: AtlasQuadFromWpf[]; on?: boolean; id?: string }): void {
+  private dispatch(msg: { type?: string; quads?: AtlasQuadFromWpf[]; on?: boolean; id?: string; value?: boolean }): void {
     if (!msg.type) return;
     switch (msg.type) {
       case 'setAtlasLayout':
@@ -142,6 +142,13 @@ class WpfLink extends EventEmitter {
         // FrameSlot.recenterEpoch + republished; Layer reagiert beim
         // nächsten xrEndFrame mit Reference-Space-Neuaufbau.
         this.emit('recenter');
+        break;
+      case 'setMasterVisible':
+        // 6.6.2026: globaler Master-Visible-Switch aus WPF (Menubar-Button
+        // oder Keybind ToggleOverlays). main.ts schaltet damit den Publish
+        // auf leere Quads — Layout-State bleibt erhalten, kommt bei Re-On
+        // sofort zurück. Default true bei Reconnect.
+        this.emit('masterVisible', !!msg.value);
         break;
       default:
         // Unknown message types are fine — just ignored. Old WPF still sends

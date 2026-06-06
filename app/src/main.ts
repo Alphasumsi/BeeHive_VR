@@ -270,6 +270,12 @@ let atlasWindow: BrowserWindow | null = null;
 // nachfolgende identische Updates → Iframes bleiben für immer about:blank.
 let atlasPageReady = false;
 
+// 6.6.2026: Globaler Master-Visible-Switch aus WPF (Menubar-Button oder
+// Keybind ToggleOverlays). false → republish liefert leere Quads → Layer
+// composed nichts. Layout-State bleibt unverändert, kommt bei Re-On
+// sofort zurück. F5-Heartbeat-Republish läuft weiter → Watchdog ruhig.
+let currentMasterVisible = true;
+
 function republish(): void {
   if (currentHwnd === 0n) return;
   const payload: FramePublish = {
@@ -280,7 +286,7 @@ function republish(): void {
     placeModeOn:   currentPlaceModeOn,
     recenterEpoch: currentRecenterEpoch,
   };
-  sharedFrame.publishAtlas(payload, currentLayout);
+  sharedFrame.publishAtlas(payload, currentMasterVisible ? currentLayout : []);
 }
 
 // Shelf-Packer (FFDH, naïv aber gut genug für ≤8 Quads): Inputs nach Höhe
@@ -758,6 +764,12 @@ app.whenReady().then(() => {
   wpfLink.on('recenter', () => {
     currentRecenterEpoch = (currentRecenterEpoch + 1) >>> 0;
     atlasLog(`[recenter] epoch=${currentRecenterEpoch}`);
+    republish();
+  });
+  wpfLink.on('masterVisible', (visible: boolean) => {
+    if (visible === currentMasterVisible) return;
+    currentMasterVisible = visible;
+    atlasLog(`[masterVisible] ${visible ? 'ON' : 'OFF'}`);
     republish();
   });
   wpfLink.start();
