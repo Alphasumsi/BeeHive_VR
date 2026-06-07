@@ -64,6 +64,19 @@ public partial class SpotterLayoutViewModel : ObservableObject
 
     private void OnSourcePropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        // Akkordeon: nur eine Karte gleichzeitig aufgeklappt. Re-Entry safe
+        // — die rekursiven Calls landen mit IsExpanded=false und matchen
+        // den inneren Block nicht.
+        if (e.PropertyName == nameof(SourceViewModel.IsExpanded)
+            && sender is SourceViewModel sv && sv.IsExpanded)
+        {
+            foreach (var other in Sources)
+            {
+                if (!ReferenceEquals(other, sv) && other.IsExpanded)
+                    other.IsExpanded = false;
+            }
+        }
+
         // UI-State nicht persistieren (gleiche Logik wie bei den Car-Layouts).
         if (e.PropertyName is nameof(SourceViewModel.IsExpanded)
                             or nameof(SourceViewModel.IsRenaming)

@@ -16,14 +16,16 @@
     -->
 
     <!-- Schwebende Karte im Dashies-Stil (BgSecondary, Rahmen rundum, abgerundet).
-         Scroll passiert innerhalb der Karte, die Karte selbst bleibt fix. -->
+         Scroll passiert innerhalb der Karte, die Karte selbst bleibt fix.
+         Oberer Bereich (Tab-Header bis Session-Pills) ist sticky-fixed via
+         DockPanel.Dock=Top; nur die Overlay-Cards-Liste darunter scrollt. -->
     <Border DataContext="{Binding SelectedLayout}"
             Background="{StaticResource BgSecondary}"
             BorderBrush="{StaticResource BorderTertiary}"
             BorderThickness="1" CornerRadius="6"
             Margin="8,16,16,16">
-    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="16,14,8,14">
-        <StackPanel>
+    <DockPanel LastChildFill="True">
+        <StackPanel DockPanel.Dock="Top" Margin="16,14,8,0">
 
             <!-- ========================================================== -->
             <!-- Tab-Header + Active-Tag rechts                              -->
@@ -225,6 +227,11 @@
                               ToolTip="Show demo data in placed overlays so they're visible while you position them in VR. Auto-pauses when iRacing connects."/>
                 </StackPanel>
             </DockPanel>
+        </StackPanel>
+
+        <!-- ========== Scrollbarer Bereich: Overlay-Cards ============ -->
+        <ScrollViewer VerticalScrollBarVisibility="Auto" Margin="16,0,8,14">
+        <StackPanel>
 
             <!-- ========================================================== -->
             <!-- Overlay-Cards                                              -->
@@ -828,6 +835,7 @@
             </StackPanel>
 
         </StackPanel>
-    </ScrollViewer>
+        </ScrollViewer>
+    </DockPanel>
     </Border>
 </UserControl>

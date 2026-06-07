@@ -54,11 +54,33 @@ public partial class MainViewModel : ObservableObject
         // Spotter und All-Sessions schließen sich aus (Spotter ist global).
         if (value && SelectedLayout != null && SelectedLayout.EditingAllSessions)
             SelectedLayout.EditingAllSessions = false;
+
+        // Akkordeon-Reste in der vorigen Liste zuklappen, sonst friert ein
+        // Highlight ein und kommt beim Zurückwechsel wieder hoch.
+        CollapseExpandedSources(value ? SelectedLayout?.Sources : SpotterLayout.Sources);
         OnPropertyChanged(nameof(EditSources));
+    }
+
+    partial void OnSelectedLayoutChanging(CarLayoutViewModel? value)
+    {
+        // Akkordeon-Reste: gerade aufgeklappte Karte im ALTEN Layout
+        // zuklappen (Changing-Variante: SelectedLayout ist noch alt).
+        // Sonst kommt sie beim Zurückwechsel wieder mit 3 px-Border +
+        // AccentBg hoch.
+        CollapseExpandedSources(SelectedLayout?.Sources);
     }
 
     partial void OnSelectedLayoutChanged(CarLayoutViewModel? value)
         => OnPropertyChanged(nameof(EditSources));
+
+    /// <summary>Setzt IsExpanded auf allen Sources der Liste auf false.
+    /// Triggert dadurch in Source_PropertyChanged den Highlight-Cleanup.</summary>
+    private static void CollapseExpandedSources(System.Collections.ObjectModel.ObservableCollection<SourceViewModel>? sources)
+    {
+        if (sources == null) return;
+        foreach (var s in sources)
+            if (s.IsExpanded) s.IsExpanded = false;
+    }
 
     /// <summary>Layout das via "Set as active" als Override gepinnt wurde.</summary>
     [ObservableProperty] private CarLayoutViewModel? _activeLayout;
@@ -1381,13 +1403,36 @@ public partial class MainViewModel : ObservableObject
             // persistenter Highlight bleibt bis Place-Mode aus oder andere Karte
             // aufgeklappt wird.
             if (e.PropertyName == nameof(SourceViewModel.IsExpanded)
-                && sender is SourceViewModel sv && sv.IsExpanded)
+                && sender is SourceViewModel sv)
             {
-                if (_lastGrabbedId != sv.Id)
+                if (sv.IsExpanded)
                 {
-                    UpdateSourceHighlight(_lastGrabbedId, false);
-                    sv.IsHighlighted = true;
-                    _lastGrabbedId = sv.Id;
+                    // Akkordeon: nur eine Karte gleichzeitig aufgeklappt.
+                    // Re-Entry safe — der Collapse-Pfad unten clearet die
+                    // andere Karten-Highlights direkt mit.
+                    if (EditSources != null)
+                    {
+                        foreach (var other in EditSources)
+                        {
+                            if (!ReferenceEquals(other, sv) && other.IsExpanded)
+                                other.IsExpanded = false;
+                        }
+                    }
+
+                    if (_lastGrabbedId != sv.Id)
+                    {
+                        UpdateSourceHighlight(_lastGrabbedId, false);
+                        sv.IsHighlighted = true;
+                        _lastGrabbedId = sv.Id;
+                    }
+                }
+                else
+                {
+                    // Zuklappen → eigenen Highlight clearen (sonst bleibt der
+                    // 3 px-Accent-Border + AccentBg-Hintergrund hängen, auch
+                    // beim Session-Wechsel auf eine andere Liste).
+                    if (sv.IsHighlighted) sv.IsHighlighted = false;
+                    if (_lastGrabbedId == sv.Id) _lastGrabbedId = "";
                 }
             }
             return;

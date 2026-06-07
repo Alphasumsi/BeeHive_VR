@@ -49,6 +49,13 @@ public partial class CarLayoutViewModel : ObservableObject
     /// </summary>
     partial void OnSelectedSessionChanging(SessionType value)
     {
+        // Akkordeon-Reste: gerade aufgeklappte Karte zuklappen, damit der
+        // Highlight nicht in _sessionsData[ALT] festfriert und beim Zurück-
+        // wechsel mit 3 px-Border und AccentBg wieder hochkommt. Der
+        // IsExpanded=false-Setter triggert in MainViewModel den Cleanup.
+        foreach (var s in Sources)
+            if (s.IsExpanded) s.IsExpanded = false;
+
         // value = NEU, SelectedSession = noch ALT — also alte (und ggf. alle
         // bei EditingAllSessions) committen.
         CommitCurrentSession();
