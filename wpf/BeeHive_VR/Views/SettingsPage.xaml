@@ -124,6 +124,25 @@
 
                                 <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
 
+                                <!-- Remember window position and scale -->
+                                <Grid Margin="0,4,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="Remember Window Position and Scale" FontSize="13" FontWeight="SemiBold"/>
+                                        <TextBlock Text="Restore window position, size and UI scale on next start"
+                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <CheckBox Grid.Column="1" IsChecked="{Binding RememberWindowPositionAndScale}"
+                                              Style="{StaticResource ToggleSwitch}"
+                                              VerticalAlignment="Center" Margin="12,0,0,0"/>
+                                </Grid>
+
+                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
+
                                 <!-- UI Scale (verschoben aus Appearance) -->
                                 <Grid Margin="0,4,0,4">
                                     <Grid.ColumnDefinitions>
@@ -171,25 +190,6 @@
                                 CornerRadius="6" Background="{StaticResource BgSecondary}"
                                 Padding="14,12" Margin="0,0,0,16">
                             <StackPanel>
-                                <!-- Remember window position and scale -->
-                                <Grid Margin="0,4,0,4">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                        <TextBlock Text="Remember Window Position and Scale" FontSize="13" FontWeight="SemiBold"/>
-                                        <TextBlock Text="Restore window position, size and UI scale on next start"
-                                                   FontSize="11" Foreground="{StaticResource TextTertiary}"
-                                                   Margin="0,2,0,0"/>
-                                    </StackPanel>
-                                    <CheckBox Grid.Column="1" IsChecked="{Binding RememberWindowPositionAndScale}"
-                                              Style="{StaticResource ToggleSwitch}"
-                                              VerticalAlignment="Center" Margin="12,0,0,0"/>
-                                </Grid>
-
-                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
-
                                 <!-- Start with Windows -->
                                 <Grid Margin="0,4,0,4">
                                     <Grid.ColumnDefinitions>
@@ -372,51 +372,6 @@
                                             Padding="12,6" VerticalAlignment="Center"/>
                                 </Grid>
 
-                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
-
-                                <StackPanel Margin="0,4,0,4">
-                                    <TextBlock Text="Browser host executable" FontSize="13" FontWeight="SemiBold"/>
-                                    <TextBlock Text="Path to browser-host.exe (WebView2 wrapper for browser sources). Leave empty to auto-detect."
-                                               FontSize="11" Foreground="{StaticResource TextTertiary}"
-                                               Margin="0,2,0,6" TextWrapping="Wrap"/>
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBox Grid.Column="0"
-                                                 Text="{Binding BrowserHostExecutable}"
-                                                 Height="30" VerticalContentAlignment="Center"
-                                                 FontSize="12"/>
-                                        <Button Grid.Column="1" Content="Browse…"
-                                                Click="BrowseBrowserHost_Click"
-                                                Padding="12,6" Margin="8,0,0,0"
-                                                VerticalAlignment="Center"/>
-                                    </Grid>
-                                </StackPanel>
-
-                                <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,8"/>
-
-                                <StackPanel Margin="0,4,0,4">
-                                    <TextBlock Text="Atlas executable" FontSize="13" FontWeight="SemiBold"/>
-                                    <TextBlock Text="Path to BeeHive_VR_Atlas.exe (Electron renderer). Auto-started when iRacing connects. Leave empty to auto-detect."
-                                               FontSize="11" Foreground="{StaticResource TextTertiary}"
-                                               Margin="0,2,0,6" TextWrapping="Wrap"/>
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBox Grid.Column="0"
-                                                 Text="{Binding AtlasExecutable}"
-                                                 Height="30" VerticalContentAlignment="Center"
-                                                 FontSize="12"/>
-                                        <Button Grid.Column="1" Content="Browse…"
-                                                Click="BrowseAtlas_Click"
-                                                Padding="12,6" Margin="8,0,0,0"
-                                                VerticalAlignment="Center"/>
-                                    </Grid>
-                                </StackPanel>
                             </StackPanel>
                         </Border>
                     </StackPanel>
@@ -536,7 +491,7 @@
                                 Padding="14,12" Margin="0,0,0,16">
                             <StackPanel>
                                 <StackPanel Margin="0,0,0,14">
-                                    <TextBlock Text="VR-Overlay Layout" FontSize="14" FontWeight="SemiBold"/>
+                                    <TextBlock Text="BeeHive VR Overlays" FontSize="14" FontWeight="SemiBold"/>
                                     <TextBlock Text="{Binding AppVersion}"
                                                FontSize="12" Foreground="{StaticResource TextTertiary}"
                                                Margin="0,2,0,0"/>

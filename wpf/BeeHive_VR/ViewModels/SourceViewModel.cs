@@ -53,36 +53,6 @@ public partial class SourceViewModel : ObservableObject
     /// für die Source-Listen-Pille (Highlight), nicht persistiert.</summary>
     [ObservableProperty] private bool _isHighlighted = false;
 
-    // Engine-Match-Status (UI-State, nicht persistiert).
-    // null = kein Status (Layout nicht aktiv), true = gecaptured, false = nicht gefunden.
-    [ObservableProperty] private bool? _isMatched;
-    [ObservableProperty] private int _captureWidth;
-    [ObservableProperty] private int _captureHeight;
-
-    /// <summary>Kurzlabel fürs Badge.</summary>
-    public string StatusText => IsMatched switch
-    {
-        true => "live",
-        false => "nicht gefunden",
-        _ => "—",
-    };
-
-    /// <summary>Detail im Tooltip (Pixelmaße nur hier, nicht in der Zeile).</summary>
-    public string StatusTooltip => IsMatched switch
-    {
-        true => $"Quelle aktiv · {CaptureWidth}×{CaptureHeight}",
-        false => "Quelle nicht gefunden — Fenstertitel / URL prüfen",
-        _ => "Kein Engine-Status (Layout nicht aktiv)",
-    };
-
-    partial void OnIsMatchedChanged(bool? value)
-    {
-        OnPropertyChanged(nameof(StatusText));
-        OnPropertyChanged(nameof(StatusTooltip));
-    }
-    partial void OnCaptureWidthChanged(int value) => OnPropertyChanged(nameof(StatusTooltip));
-    partial void OnCaptureHeightChanged(int value) => OnPropertyChanged(nameof(StatusTooltip));
-
     // Backup vom Namen für Cancel-Funktion (Esc beim Editieren)
     private string _nameBackup = "";
 

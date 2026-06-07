@@ -252,16 +252,6 @@ public partial class MainViewModel : ObservableObject
                 if (connected) PushCurrentStateToEngine();
             });
         };
-        engine.StatusReceived += (_, sources) =>
-        {
-            var s = string.Join(", ", sources.Select(x =>
-                $"{x.Id}={(x.Matched ? $"{x.Width}x{x.Height}" : "missing")}"));
-            Logger.Info($"EngineLink status: {s}");
-
-            // Status auf die SourceViewModels des aktiven Layouts mappen (UI-Thread).
-            Application.Current?.Dispatcher.BeginInvoke(() => ApplyEngineStatus(sources));
-        };
-
         // Place-in-VR (Häppchen 4): Engine pusht neue Pose/Scale/Opacity während
         // der User in VR zieht — wir schreiben sie in die passende SourceVM und
         // damit über die normale Pipe in JSON + UI-Slider.
@@ -737,24 +727,9 @@ public partial class MainViewModel : ObservableObject
         return true;
     }
 
-    /// <summary>Reconciled browser-host-Children + pusht die Liste an die Engine.</summary>
+    /// <summary>Pusht die Source-Liste als Atlas-Layout an die Engine.</summary>
     private static void PushSources(List<SourceModel> sources)
     {
-        // Browser-Hosts werden nicht mehr gespawnt — Atlas-Iframes in Electron
-        // übernehmen den Job. Push-Logik bleibt identisch (Atlas-Quads im
-        // Atlas-Layout-Push, hier nur der Legacy-PushLayout an die Engine).
-        var enginePayload = sources.Select(s => s.Type == SourceType.Browser
-            ? new SourceModel
-            {
-                Id = s.Id, Name = s.Name, Type = s.Type, Target = s.Id, Visible = s.Visible,
-                X = s.X, Y = s.Y, Z = s.Z, Yaw = s.Yaw, Pitch = s.Pitch, Scale = s.Scale, Opacity = s.Opacity,
-                PixelWidth = s.PixelWidth, PixelHeight = s.PixelHeight,
-            }
-            : s).ToList();
-        EngineLink.Instance.PushLayout(enginePayload);
-
-        // BeeHive_VR atlas — same trigger, new wire format. Electron consumes
-        // this; the old layer never saw it. See PushAtlasLayout / wpf-link.ts.
         EngineLink.Instance.PushAtlasLayout(BuildAtlasQuads(sources));
     }
 
@@ -1441,37 +1416,6 @@ public partial class MainViewModel : ObservableObject
             }
         }
         // Andere Properties (z.B. Id) ignorieren wir
-    }
-
-    /// <summary>
-    /// Engine-Reverse-Channel-Status auf die Sources des AKTIVEN Layouts mappen
-    /// (nur das rendert die Engine). Sources im Status → matched/Maße setzen,
-    /// fehlende → nicht gefunden. Andere Layouts behalten neutralen Status (null).
-    /// Reiner UI-State, nicht persistiert (nicht in der Save-Allowlist).
-    /// </summary>
-    private void ApplyEngineStatus(System.Collections.Generic.IReadOnlyList<EngineSourceStatus> statuses)
-    {
-        var layout = ActiveLayout;
-        if (layout == null) return;
-
-        var byId = new System.Collections.Generic.Dictionary<string, EngineSourceStatus>();
-        foreach (var st in statuses) byId[st.Id] = st;
-
-        foreach (var src in layout.Sources)
-        {
-            if (byId.TryGetValue(src.Id, out var st))
-            {
-                src.IsMatched = st.Matched;
-                src.CaptureWidth = (int)st.Width;
-                src.CaptureHeight = (int)st.Height;
-            }
-            else
-            {
-                src.IsMatched = false;
-                src.CaptureWidth = 0;
-                src.CaptureHeight = 0;
-            }
-        }
     }
 
     private bool _suppressEnginePush;

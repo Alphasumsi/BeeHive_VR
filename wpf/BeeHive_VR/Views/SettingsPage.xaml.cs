@@ -62,6 +62,10 @@ public partial class SettingsPage : UserControl
         {
             if (FindName($"Section_{name}") is FrameworkElement section)
             {
+                // Collapsed Sections (z.B. Developer ohne IsDevMode) NICHT mitzählen —
+                // sonst klaut die Y=0-Höhe der vorigen Section den Highlight (etwa
+                // About → Developer-Sprung am Page-Ende).
+                if (section.Visibility != Visibility.Visible) continue;
                 var y = section.TransformToAncestor(host).Transform(new Point(0, 0)).Y;
                 // Section gilt als "oben angeschlagen" wenn ihre Oberkante <= Scroll-Offset + 20px Toleranz
                 if (y <= offset + 20) current = name;
@@ -74,7 +78,7 @@ public partial class SettingsPage : UserControl
 
     private void OpenGitHub_Click(object sender, RoutedEventArgs e)
             => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            { FileName = "https://github.com/Alphasumsi/VR-Overlay", UseShellExecute = true });
+            { FileName = "https://github.com/Alphasumsi/BeeHive_VR", UseShellExecute = true });
 
     private void OpenConfigsFolder_Click(object sender, RoutedEventArgs e)
         => System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
@@ -86,46 +90,6 @@ public partial class SettingsPage : UserControl
         if (!string.IsNullOrEmpty(folder))
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
             { FileName = folder, UseShellExecute = true });
-    }
-
-    private void BrowseBrowserHost_Click(object sender, RoutedEventArgs e)
-    {
-        var dlg = new Microsoft.Win32.OpenFileDialog
-        {
-            Title = "Select browser-host.exe",
-            Filter = "Executable (*.exe)|*.exe|All files (*.*)|*.*",
-            CheckFileExists = true,
-        };
-
-        var current = VM?.BrowserHostExecutable;
-        if (!string.IsNullOrWhiteSpace(current))
-        {
-            var dir = System.IO.Path.GetDirectoryName(current);
-            if (System.IO.Directory.Exists(dir)) dlg.InitialDirectory = dir;
-        }
-
-        if (dlg.ShowDialog() == true && VM is not null)
-            VM.BrowserHostExecutable = dlg.FileName;
-    }
-
-    private void BrowseAtlas_Click(object sender, RoutedEventArgs e)
-    {
-        var dlg = new Microsoft.Win32.OpenFileDialog
-        {
-            Title = "Select BeeHive_VR_Atlas.exe",
-            Filter = "Executable (*.exe)|*.exe|All files (*.*)|*.*",
-            CheckFileExists = true,
-        };
-
-        var current = VM?.AtlasExecutable;
-        if (!string.IsNullOrWhiteSpace(current))
-        {
-            var dir = System.IO.Path.GetDirectoryName(current);
-            if (System.IO.Directory.Exists(dir)) dlg.InitialDirectory = dir;
-        }
-
-        if (dlg.ShowDialog() == true && VM is not null)
-            VM.AtlasExecutable = dlg.FileName;
     }
 
     // ---- Developer-Section --------------------------------------------------

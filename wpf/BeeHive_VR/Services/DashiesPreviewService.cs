@@ -168,29 +168,20 @@ public sealed class DashiesPreviewService
 
     /// <summary>
     /// Sucht <c>browser-host.exe</c> in dieser Reihenfolge:
-    ///   1. Settings-Override <c>BrowserHostExecutable</c> (Dev / Custom-Install)
-    ///   2. Neben der WPF-Exe (Installer-Layout, Phase G)
-    ///   3. Walk-up vom WPF-Assembly-Folder nach <c>engine\bin\x64\Release\browser-host.exe</c>
+    ///   1. Neben der WPF-Exe (Installer-Layout, Phase G)
+    ///   2. Walk-up vom WPF-Assembly-Folder nach <c>engine\bin\x64\Release\browser-host.exe</c>
     /// </summary>
     private static string? ResolveExePath()
     {
-        // 1. Settings-Override
-        try
-        {
-            var p = SettingsStore.Current?.BrowserHostExecutable;
-            if (!string.IsNullOrWhiteSpace(p) && File.Exists(p)) return p;
-        }
-        catch { /* SettingsStore noch nicht initialisiert — kein Blocker */ }
-
         var asm = Assembly.GetEntryAssembly()?.Location;
         var asmDir = string.IsNullOrEmpty(asm) ? null : Path.GetDirectoryName(asm);
         if (asmDir == null) return null;
 
-        // 2. Sibling (Installer-Layout)
+        // 1. Sibling (Installer-Layout)
         var sibling = Path.Combine(asmDir, "browser-host.exe");
         if (File.Exists(sibling)) return sibling;
 
-        // 3. Walk-up bis Repo-Root, suche engine\bin\x64\Release\browser-host.exe
+        // 2. Walk-up bis Repo-Root, suche engine\bin\x64\Release\browser-host.exe
         var dir = asmDir;
         for (int i = 0; i < 8 && dir != null; i++)
         {

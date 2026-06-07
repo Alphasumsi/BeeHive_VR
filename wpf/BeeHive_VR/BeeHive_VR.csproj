@@ -17,7 +17,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <None Remove="Assets\menu_placeholder.png" />
+    <None Remove="Assets\Beehive.png" />
     <None Remove="Assets\bee_icon_256.ico" />
     <None Remove="Assets\TP_StackSide_CMYK_DarkBG.png" />
     <None Remove="Assets\irdashies_logo_100.png" />
@@ -31,7 +31,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Resource Include="Assets\menu_placeholder.png" />
+    <Resource Include="Assets\Beehive.png" />
     <Resource Include="Assets\bee_icon_256.ico" />
     <Resource Include="Assets\TP_StackSide_CMYK_DarkBG.png" />
     <Resource Include="Assets\irdashies_logo_100.png" />

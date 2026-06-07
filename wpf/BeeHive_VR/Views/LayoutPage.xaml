@@ -311,7 +311,7 @@
                                         <ColumnDefinition Width="Auto"/>   <!-- 1 Sichtbar -->
                                         <ColumnDefinition Width="Auto"/>   <!-- 2 Typ-Icon -->
                                         <ColumnDefinition Width="Auto"/>   <!-- 3 Name (gedeckelt) -->
-                                        <ColumnDefinition Width="Auto"/>   <!-- 4 Status -->
+                                        <ColumnDefinition Width="Auto"/>   <!-- 4 (frei, war Status-Ellipse — entfernt 6.6.) -->
                                         <ColumnDefinition Width="*"/>      <!-- 5 Target (schrumpft) -->
                                         <ColumnDefinition Width="Auto"/>   <!-- 6 Menü -->
                                         <ColumnDefinition Width="Auto"/>   <!-- 7 Expand -->
@@ -364,13 +364,6 @@
                                                  Visibility="{Binding IsRenaming,
                                                               Converter={StaticResource BoolToVis}}"/>
                                     </Grid>
-
-                                    <StackPanel Grid.Column="4" Orientation="Horizontal"
-                                                VerticalAlignment="Center" Margin="8,0,8,0">
-                                        <Ellipse Width="8" Height="8" VerticalAlignment="Center"
-                                                 Fill="{Binding IsMatched, Converter={StaticResource MatchToBrush}}"
-                                                 ToolTip="{Binding StatusTooltip}"/>
-                                    </StackPanel>
 
                                     <TextBlock Grid.Column="5" Text="{Binding Target}"
                                                FontSize="12" FontFamily="Cascadia Mono, Consolas"

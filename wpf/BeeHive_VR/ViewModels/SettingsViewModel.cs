@@ -59,10 +59,6 @@ public partial class SettingsViewModel : ObservableObject
     /// <summary>Working directory für die Dev-Section.</summary>
     public string WorkingDirectory => AppInfo.WorkingDirectory;
 
-    // --- Engine ----------------------------------------------------------
-    [ObservableProperty] private string _browserHostExecutable = "";
-    [ObservableProperty] private string _atlasExecutable = "";
-
     // --- Icon-Nav Sichtbarkeit (Appearance) ------------------------------
     [ObservableProperty] private bool _showMenu = true;
     [ObservableProperty] private bool _showLayout = true;
@@ -116,8 +112,6 @@ public partial class SettingsViewModel : ObservableObject
         StartInTray = s.StartInTray;
         RememberWindowPositionAndScale = s.RememberWindowPositionAndScale;
         StartPage = s.StartPage;
-        BrowserHostExecutable = s.BrowserHostExecutable;
-        AtlasExecutable = s.AtlasExecutable;
         ShowMenu = s.ShowMenu;
         ShowLayout = s.ShowLayout;
         ShowTradingPaints = s.ShowTradingPaints;
@@ -146,8 +140,6 @@ public partial class SettingsViewModel : ObservableObject
         StartInTray = false;
         RememberWindowPositionAndScale = false;
         StartPage = "Layout";
-        BrowserHostExecutable = "";
-        AtlasExecutable = "";
         ShowMenu = true;
         ShowLayout = true;
         ShowTradingPaints = true;
@@ -169,8 +161,6 @@ public partial class SettingsViewModel : ObservableObject
         s.StartInTray = StartInTray;
         s.RememberWindowPositionAndScale = RememberWindowPositionAndScale;
         s.StartPage = StartPage;
-        s.BrowserHostExecutable = BrowserHostExecutable;
-        s.AtlasExecutable = AtlasExecutable;
         s.ShowMenu = ShowMenu;
         s.ShowLayout = ShowLayout;
         s.ShowTradingPaints = ShowTradingPaints;
@@ -195,8 +185,6 @@ public partial class SettingsViewModel : ObservableObject
         AutoSave();
     }
     partial void OnStartPageChanged(string value) => AutoSave();
-    partial void OnBrowserHostExecutableChanged(string value) => AutoSave();
-    partial void OnAtlasExecutableChanged(string value) => AutoSave();
 
     // Icon-Nav-Sichtbarkeit: persistieren + live an die MainViewModel spiegeln
     // (die Nav-Buttons binden dort, gleiche Mechanik wie UiScale → MainWindow).

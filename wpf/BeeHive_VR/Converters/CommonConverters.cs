@@ -154,33 +154,6 @@ public class MultiplyBy100Converter : IValueConverter
 }
 
 /// <summary>
-/// Engine-Match-Status (bool?) → Brush für das Source-Status-Badge.
-/// true = grün (live), false = rot (nicht gefunden), null = grau (kein Status).
-/// </summary>
-public class MatchStatusToBrushConverter : IValueConverter
-{
-    private static readonly System.Windows.Media.SolidColorBrush Live =
-        new(System.Windows.Media.Color.FromRgb(0x3F, 0xB9, 0x50));
-    private static readonly System.Windows.Media.SolidColorBrush Missing =
-        new(System.Windows.Media.Color.FromRgb(0xE5, 0x53, 0x4B));
-    private static readonly System.Windows.Media.SolidColorBrush Unknown =
-        new(System.Windows.Media.Color.FromRgb(0x6E, 0x76, 0x81));
-
-    public object Convert(object? value, Type targetType,
-                          object? parameter, CultureInfo culture)
-        => value switch
-        {
-            true => Live,
-            false => Missing,
-            _ => Unknown,
-        };
-
-    public object ConvertBack(object? value, Type targetType,
-                              object? parameter, CultureInfo culture)
-        => throw new NotImplementedException();
-}
-
-/// <summary>
 /// Vergleicht zwei Objekte per Reference-Equality.
 /// values[0] == values[1] → Visible, sonst Collapsed.
 /// Wird benutzt um das Pin-Icon nur am aktiven Layout zu zeigen.

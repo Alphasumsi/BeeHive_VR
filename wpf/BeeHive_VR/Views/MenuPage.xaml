@@ -8,7 +8,7 @@
 
     <!--
         Platzhalter-Page. Hier wird später ein Hauptmenü/Dashboard reinkommen.
-        Bild: Assets/menu_placeholder.png (Build Action: Resource).
+        Bild: Assets/Beehive.png (Build Action: Resource).
     -->
 
     <Grid>
@@ -20,8 +20,8 @@
 
         <!-- Hauptinhalt mittig -->
         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-            <Image Width="240" Height="240"
-                   Source="pack://application:,,,/Assets/menu_placeholder.png"
+            <Image Width="600" Height="300"
+                   Source="pack://application:,,,/Assets/Beehive.png"
                    Stretch="Uniform"
                    Margin="0,0,0,20">
                 <Image.Style>

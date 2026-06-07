@@ -12,9 +12,8 @@ namespace BeeHiveVR.Services;
 /// damit der nächste WPF-Start nicht auf einen Zombie trifft.
 ///
 /// Pfad-Auflösung (analog zu <see cref="DashiesPreviewService"/>):
-///   1. Settings-Override <c>AtlasExecutable</c>
-///   2. Sibling neben der WPF-Exe (Installer-Layout)
-///   3. Walk-up zu <c>app\out\BeeHive_VR_Atlas-win32-x64\BeeHive_VR_Atlas.exe</c>
+///   1. Sibling neben der WPF-Exe (Installer-Layout)
+///   2. Walk-up zu <c>app\out\BeeHive_VR_Atlas-win32-x64\BeeHive_VR_Atlas.exe</c>
 ///      (Forge-Default-Output)
 ///
 /// Single-Process-Garantie hält das Electron-eigene Single-Instance-Lock
@@ -95,23 +94,15 @@ public sealed class ElectronAtlasService
 
     private static string? ResolveExePath()
     {
-        // 1. Settings-Override
-        try
-        {
-            var p = SettingsStore.Current?.AtlasExecutable;
-            if (!string.IsNullOrWhiteSpace(p) && File.Exists(p)) return p;
-        }
-        catch { /* SettingsStore noch nicht initialisiert */ }
-
         var asm = Assembly.GetEntryAssembly()?.Location;
         var asmDir = string.IsNullOrEmpty(asm) ? null : Path.GetDirectoryName(asm);
         if (asmDir == null) return null;
 
-        // 2. Sibling neben der WPF-Exe (Installer-Layout)
+        // 1. Sibling neben der WPF-Exe (Installer-Layout)
         var sibling = Path.Combine(asmDir, "BeeHive_VR_Atlas.exe");
         if (File.Exists(sibling)) return sibling;
 
-        // 3. Walk-up zum Repo-Root, dann ins Forge-Default-Output
+        // 2. Walk-up zum Repo-Root, dann ins Forge-Default-Output
         var dir = asmDir;
         for (int i = 0; i < 8 && dir != null; i++)
         {

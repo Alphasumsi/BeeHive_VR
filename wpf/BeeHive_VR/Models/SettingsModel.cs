@@ -30,22 +30,6 @@ public class SettingsModel
     [JsonPropertyName("startPage")]
     public string StartPage { get; set; } = "Layout";
 
-    // --- Engine -----------------------------------------------------------
-    /// <summary>
-    /// Pfad zur browser-host.exe (WebView2-Wrapper für Browser-Sources).
-    /// Leer = Auto-Detect (versucht den dev-Build-Pfad neben dem Layer).
-    /// </summary>
-    [JsonPropertyName("browserHostExecutable")]
-    public string BrowserHostExecutable { get; set; } = "";
-
-    /// <summary>
-    /// Pfad zur Electron-Atlas-Exe (BeeHive_VR_Atlas.exe). Wird beim iRacing-
-    /// Connect automatisch gestartet. Leer = Auto-Detect (sucht zuerst neben
-    /// der WPF-Exe, dann via Walk-up zu app\out\BeeHive_VR_Atlas-win32-x64\).
-    /// </summary>
-    [JsonPropertyName("atlasExecutable")]
-    public string AtlasExecutable { get; set; } = "";
-
     // --- UI ---------------------------------------------------------------
     // Icon-Nav Sichtbarkeit (Appearance-Toggles). Menu/Layout/TradingPaints
     // standardmäßig an; Autostart/Buttonbox sind Dev-Platzhalter.

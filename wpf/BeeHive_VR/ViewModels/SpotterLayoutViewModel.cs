@@ -67,10 +67,7 @@ public partial class SpotterLayoutViewModel : ObservableObject
         // UI-State nicht persistieren (gleiche Logik wie bei den Car-Layouts).
         if (e.PropertyName is nameof(SourceViewModel.IsExpanded)
                             or nameof(SourceViewModel.IsRenaming)
-                            or nameof(SourceViewModel.IsDragging)
-                            or nameof(SourceViewModel.IsMatched)
-                            or nameof(SourceViewModel.CaptureWidth)
-                            or nameof(SourceViewModel.CaptureHeight))
+                            or nameof(SourceViewModel.IsDragging))
             return;
         Persist();
     }

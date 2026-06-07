@@ -17,7 +17,6 @@
         <conv:StringEqualsToBoolConverter          x:Key="StringEqualsToBool"/>
         <conv:MultiplyBy100Converter               x:Key="Mult100"/>
         <conv:NotReferenceEqualsToVisibilityConverter x:Key="NotRefEqualsToVis"/>
-        <conv:MatchStatusToBrushConverter          x:Key="MatchToBrush"/>
         <conv:InverseBoolConverter                 x:Key="NotBool"/>
         <conv:ActiveContextTagConverter            x:Key="ActiveContextTag"/>
         <conv:SectionDisplayNameConverter          x:Key="SectionDisplayName"/>

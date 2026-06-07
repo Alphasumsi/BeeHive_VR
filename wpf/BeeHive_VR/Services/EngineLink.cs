@@ -78,14 +78,6 @@ public sealed class AtlasQuadDto
     [JsonPropertyName("type")]    public string? Type { get; set; }
 }
 
-public sealed class EngineSourceStatus
-{
-    [JsonPropertyName("id")] public string Id { get; set; } = "";
-    [JsonPropertyName("matched")] public bool Matched { get; set; }
-    [JsonPropertyName("width")] public uint Width { get; set; }
-    [JsonPropertyName("height")] public uint Height { get; set; }
-}
-
 /// <summary>
 /// Engine→GUI während Place-in-VR: neue Pose/Scale/Opacity der gedraggten Source.
 /// </summary>
@@ -143,9 +135,6 @@ public sealed class EngineLink
     private NamedPipeServerStream? _currentPipe;
     private readonly ConcurrentQueue<byte[]> _writeQueue = new();
     private readonly AutoResetEvent _writeSignal = new(false);
-    // Letzter setLayout-Payload — bei Slider-Drags coalescen wir Drops in der Queue
-    // (kein Build-Up wenn der User schneller produziert als die Pipe entleeren kann).
-    private const string LayoutMessageType = "setLayout";
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -158,9 +147,6 @@ public sealed class EngineLink
 
     /// <summary>Engine connected/disconnected. Fired from background thread.</summary>
     public event EventHandler<bool>? ConnectionChanged;
-
-    /// <summary>Engine sendet Status-Update (z.B. Source matched/missing). Background thread.</summary>
-    public event EventHandler<IReadOnlyList<EngineSourceStatus>>? StatusReceived;
 
     /// <summary>Engine sendet neue Pose während Place-in-VR-Drag. Background thread.</summary>
     public event EventHandler<PlaceUpdate>? PlaceUpdateReceived;
@@ -195,16 +181,6 @@ public sealed class EngineLink
         _serverTask = null;
         _writerTask = null;
         _cts = null;
-    }
-
-    public void PushLayout(IEnumerable<SourceModel> sources)
-    {
-        var payload = new
-        {
-            type = "setLayout",
-            sources = sources,
-        };
-        SendJson(payload);
     }
 
     /// <summary>
@@ -336,24 +312,6 @@ public sealed class EngineLink
                         var ver = doc.RootElement.TryGetProperty("engineVersion", out var v) ? v.GetString() : "?";
                         Logger.Info($"EngineLink: hello from \"{app}\" engine={ver}");
                         break;
-                    case "status":
-                        if (doc.RootElement.TryGetProperty("sources", out var srcs) &&
-                            srcs.ValueKind == JsonValueKind.Array)
-                        {
-                            var list = new List<EngineSourceStatus>(srcs.GetArrayLength());
-                            foreach (var item in srcs.EnumerateArray())
-                            {
-                                list.Add(new EngineSourceStatus
-                                {
-                                    Id = item.TryGetProperty("id", out var id) ? id.GetString() ?? "" : "",
-                                    Matched = item.TryGetProperty("matched", out var m) && m.GetBoolean(),
-                                    Width = item.TryGetProperty("width", out var w) ? w.GetUInt32() : 0,
-                                    Height = item.TryGetProperty("height", out var h) ? h.GetUInt32() : 0,
-                                });
-                            }
-                            StatusReceived?.Invoke(this, list);
-                        }
-                        break;
                     case "placeUpdate":
                         {
                             var root = doc.RootElement;
@@ -434,9 +392,7 @@ public sealed class EngineLink
 
     /// <summary>
     /// Dedizierter Writer-Loop. Liest Frames aus der Queue und schickt sie an den
-    /// aktuell verbundenen Pipe. Coalesced setLayout-Frames: wenn mehrere queued sind,
-    /// behalten wir nur den letzten — bei Slider-Drag spielt nur der finale State ne Rolle,
-    /// alle Zwischenstände sind veraltet sobald sie an der Reihe wären.
+    /// aktuell verbundenen Pipe.
     /// </summary>
     private void WriterLoop(CancellationToken ct)
     {
@@ -444,14 +400,11 @@ public sealed class EngineLink
         {
             _writeSignal.WaitOne(500);
 
-            // Coalesce: nur letzte setLayout-Message behalten (4 Bytes Header skip, dann
-            // String.Contains auf "setLayout" — robust genug für unseren simplen Protokoll).
             var batch = new List<byte[]>();
             while (_writeQueue.TryDequeue(out var f))
             {
                 batch.Add(f);
             }
-            CoalesceLayoutMessages(batch);
 
             var pipe = _currentPipe;
             if (pipe == null || !pipe.IsConnected) continue;
@@ -472,33 +425,4 @@ public sealed class EngineLink
         }
     }
 
-    private static void CoalesceLayoutMessages(List<byte[]> batch)
-    {
-        // Behalte alle non-setLayout-Frames in Reihenfolge; bei mehreren setLayout: nur letzten.
-        int lastLayoutIdx = -1;
-        for (int i = batch.Count - 1; i >= 0; i--)
-        {
-            if (IsType(batch[i], LayoutMessageType))
-            {
-                lastLayoutIdx = i;
-                break;
-            }
-        }
-        if (lastLayoutIdx < 0) return;
-        for (int i = batch.Count - 1; i >= 0; i--)
-        {
-            if (i != lastLayoutIdx && IsType(batch[i], LayoutMessageType))
-            {
-                batch.RemoveAt(i);
-            }
-        }
-    }
-
-    private static bool IsType(byte[] frame, string type)
-    {
-        if (frame.Length < 4 + 10) return false; // 4 byte len + minimal JSON
-        // Skip 4-byte length prefix, decode UTF-8 (just check for "type":"X")
-        var jsonStr = Encoding.UTF8.GetString(frame, 4, frame.Length - 4);
-        return jsonStr.Contains($"\"type\":\"{type}\"");
-    }
 }
