@@ -285,9 +285,12 @@ public partial class MainViewModel : ObservableObject
         engine.PlaceModeChanged += (_, on) =>
             Application.Current?.Dispatcher.BeginInvoke(() => OnPlaceModeChanged(on));
 
-        // Spotter-Set-Änderung → nur neu pushen wenn Spotter gerade live ist.
+        // Spotter-Set-Änderung → nur neu pushen wenn Spotter gerade live ist,
+        // und EditSources-Notify feuern damit der Welcome-Empty-State-Trigger
+        // (CountToEmpty) re-evaluiert wenn der User gerade Spotter editiert.
         SpotterLayout.OverlaysChanged += (_, _) =>
         {
+            if (EditingSpotter) OnPropertyChanged(nameof(EditSources));
             if (_overlayContext == OverlayContext.Spotter) PushCurrentLayoutToEngine();
         };
 
@@ -331,13 +334,28 @@ public partial class MainViewModel : ObservableObject
 
     /// <summary>
     /// Findet das Layout das zum gegebenen Auto-Namen passt und macht es aktiv.
-    /// Bei Mismatch und Setting `AutoCreateLayoutOnNewCar=true` wird ein neues
-    /// Layout mit exakt dem iRacing-CarName angelegt und gespeichert.
-    /// Sonst Fallback auf Default-Layout. Leerer Auto-Name → kein Switch.
+    /// Bei Mismatch wird IMMER ein neues car-spezifisches Layout angelegt und
+    /// gespeichert. Wenn Setting `AutoCreateLayoutOnNewCar` (= "use default as
+    /// template") aktiv ist und ein Default-Layout existiert, werden dessen
+    /// Sources aller 4 Sessions mit frischen IDs in das neue Layout kopiert —
+    /// sonst startet das neue Layout mit leeren Sessions. Bei Save-Fehler
+    /// Fallback auf Default-Layout (rein in-memory). Leerer Auto-Name → kein
+    /// Switch.
     /// </summary>
     private void AutoSwitchLayoutForCar(string carName)
     {
         if (string.IsNullOrWhiteSpace(carName)) return;
+
+        // Default-Pin-Schutz: wenn der User Default als ActiveLayout gepinnt hat
+        // (typisch beim Vorlage-Setup im Cockpit, Place-in-VR braucht Live-Session),
+        // soll der Auto-Switch nicht reinpfuschen. User muss aktiv ent-pinnen
+        // oder ein anderes Layout pinnen, um den Car-spezifischen Auto-Switch
+        // wieder zu aktivieren.
+        if (ActiveLayout != null && ActiveLayout.IsDefault)
+        {
+            Logger.Info($"Auto-layout-switch skipped: Default is pinned (car=\"{carName}\")");
+            return;
+        }
 
         var match = Layouts.FirstOrDefault(l => !l.IsDefault &&
             string.Equals(l.CarName, carName, System.StringComparison.OrdinalIgnoreCase));
@@ -355,45 +373,59 @@ public partial class MainViewModel : ObservableObject
             return;
         }
 
-        if (SettingsStore.Current.AutoCreateLayoutOnNewCar)
+        // Kein Match → neues Layout anlegen (Anlage immer; Template optional).
+        var sessions = new List<SessionConfigModel>
         {
-            var newModel = new CarLayoutModel
+            new() { Session = SessionType.Practice },
+            new() { Session = SessionType.Qualify },
+            new() { Session = SessionType.Race },
+            new() { Session = SessionType.TestDrive },
+        };
+
+        var useTemplate = SettingsStore.Current.AutoCreateLayoutOnNewCar;
+        var defaultLayoutVm = Layouts.FirstOrDefault(l => l.IsDefault);
+        if (useTemplate && defaultLayoutVm != null)
+        {
+            // Snapshot: Sources pro Session aus dem Default kopieren, jede mit
+            // frischer Id damit das neue Layout unabhängig editierbar ist.
+            foreach (var sess in sessions)
             {
-                CarName = carName,
-                CarClass = "",
-                IsDefault = false,
-                IsFavorite = false,
-                Sessions = new List<SessionConfigModel>
+                var srcList = defaultLayoutVm.GetSessionSources(sess.Session);
+                foreach (var sv in srcList)
                 {
-                    new() { Session = SessionType.Practice },
-                    new() { Session = SessionType.Qualify },
-                    new() { Session = SessionType.Race },
-                    new() { Session = SessionType.TestDrive },
-                },
-            };
-            if (ConfigStore.Save(newModel))
-            {
-                var newVm = CarLayoutViewModel.FromModel(newModel);
-                Layouts.Add(newVm);
-                SubscribeToLayout(newVm);
-                UpdateLastFavoriteFlags();
-                Logger.Info($"Auto-layout-switch: car=\"{carName}\" → auto-created new layout");
-                ActiveLayout = newVm;
-                SelectedLayout = newVm; // Editor mitwechseln
-                return;
+                    var clone = sv.ToModel();
+                    clone.Id = System.Guid.NewGuid().ToString();
+                    sess.Sources.Add(clone);
+                }
             }
-            Logger.Warn($"Auto-layout-switch: car=\"{carName}\" → ConfigStore.Save failed, falling back to default");
         }
 
-        var defaultLayout = Layouts.FirstOrDefault(l => l.IsDefault);
-        if (defaultLayout != null)
+        var newModel = new CarLayoutModel
         {
-            if (ActiveLayout != defaultLayout)
-            {
-                Logger.Info($"Auto-layout-switch: car=\"{carName}\" → no match, using default");
-                ActiveLayout = defaultLayout;
-            }
-            if (SelectedLayout != defaultLayout) SelectedLayout = defaultLayout;
+            CarName = carName,
+            CarClass = "",
+            IsDefault = false,
+            IsFavorite = false,
+            Sessions = sessions,
+        };
+        if (ConfigStore.Save(newModel))
+        {
+            var newVm = CarLayoutViewModel.FromModel(newModel);
+            Layouts.Add(newVm);
+            SubscribeToLayout(newVm);
+            UpdateLastFavoriteFlags();
+            Logger.Info($"Auto-layout-switch: car=\"{carName}\" → created new layout " +
+                        (useTemplate && defaultLayoutVm != null ? "(default template applied)" : "(empty)"));
+            ActiveLayout = newVm;
+            SelectedLayout = newVm;
+            return;
+        }
+
+        Logger.Warn($"Auto-layout-switch: car=\"{carName}\" → ConfigStore.Save failed, falling back to default in-memory");
+        if (defaultLayoutVm != null)
+        {
+            if (ActiveLayout != defaultLayoutVm) ActiveLayout = defaultLayoutVm;
+            if (SelectedLayout != defaultLayoutVm) SelectedLayout = defaultLayoutVm;
         }
     }
 
@@ -1224,6 +1256,13 @@ public partial class MainViewModel : ObservableObject
 
         var owner = Layouts.FirstOrDefault(l => ReferenceEquals(l.Sources, coll));
         if (owner == null) return;
+
+        // EditSources-Refresh: Welcome-Empty-State (CountToEmpty-Converter auf
+        // EditSources) re-evaluiert nur bei Property-Notify, nicht bei
+        // Collection-Internals. Bei Add/Remove/Reset auf der aktuell
+        // bearbeiteten Source-Liste den Visibility-Trigger explizit feuern.
+        if (!EditingSpotter && ReferenceEquals(coll, SelectedLayout?.Sources))
+            OnPropertyChanged(nameof(EditSources));
 
         // Während Session-Refresh NICHT speichern — das ist nur UI-Reload
         if (owner.IsRefreshing) return;

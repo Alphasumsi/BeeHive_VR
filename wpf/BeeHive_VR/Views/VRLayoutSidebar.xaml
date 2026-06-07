@@ -44,25 +44,9 @@
                 <ItemsControl ItemsSource="{Binding LayoutsView}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate DataType="{x:Type vm:CarLayoutViewModel}">
-                            <!-- Visibility-Wrapper: Default verbergen wenn AutoCreate=on
-                                 (interner Fallback bleibt funktional). -->
+                            <!-- Default-Layout ist immer sichtbar — User editiert es
+                                 als Vorlage für neu erkannte Fahrzeuge. -->
                             <Border>
-                                <Border.Style>
-                                    <Style TargetType="Border">
-                                        <Setter Property="Visibility" Value="Visible"/>
-                                        <Style.Triggers>
-                                            <MultiDataTrigger>
-                                                <MultiDataTrigger.Conditions>
-                                                    <Condition Binding="{Binding IsDefault}" Value="True"/>
-                                                    <Condition Binding="{Binding DataContext.AutoCreateLayoutOnNewCar,
-                                                                                RelativeSource={RelativeSource AncestorType=UserControl}}"
-                                                               Value="True"/>
-                                                </MultiDataTrigger.Conditions>
-                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                            </MultiDataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Border.Style>
                             <!-- Outer Wrapper für Trennstrich nach Default/letztem Favoriten -->
                             <Border>
                                 <Border.Style>
@@ -246,8 +230,12 @@
 
                                         <!-- Set-active-Pin: gleiches Verhalten wie der Fav-Stern.
                                              Bei Hover ausgegraut sichtbar, dauerhaft gefüllt wenn dieses
-                                             Layout aktiv ist. Click toggelt aktiv/inaktiv.
-                                             Bei Default-Layout ausgeblendet. -->
+                                             Layout aktiv ist. Click toggelt aktiv/inaktiv. Auch auf Default
+                                             erlaubt — User kann den Default als ActiveLayout pinnen um per
+                                             Dashies-„Add to layout"-Button Widgets in die Vorlage zu
+                                             schieben. Konflikt: AutoSwitchLayoutForCar überschreibt den
+                                             Pin sobald iRacing einen bekannten LiveCar meldet — also
+                                             Default-Setup am besten ohne aktive Session. -->
                                         <Button Grid.Column="3" Width="22" Height="22"
                                                 Click="LayoutPin_Click"
                                                 Tag="{Binding}"
@@ -268,9 +256,6 @@
                                                         </DataTrigger>
                                                         <DataTrigger Binding="{Binding IsMouseOver, ElementName=RowRoot}" Value="True">
                                                             <Setter Property="Opacity" Value="1"/>
-                                                        </DataTrigger>
-                                                        <DataTrigger Binding="{Binding IsDefault}" Value="True">
-                                                            <Setter Property="Visibility" Value="Collapsed"/>
                                                         </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>

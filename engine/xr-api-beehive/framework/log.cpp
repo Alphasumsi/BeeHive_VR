@@ -57,7 +57,7 @@ namespace openxr_api_layer::log {
         void RotateLogIfNeeded() {
             if (!logStream.is_open()) return;
             std::error_code ec;
-            std::filesystem::path logFile = openxr_api_layer::localAppData / "engine.log";
+            std::filesystem::path logFile = openxr_api_layer::localAppData / "logs" / "engine.log";
             const auto sz = std::filesystem::file_size(logFile, ec);
             if (ec || sz <= k_logMaxBytes) return;
             try {

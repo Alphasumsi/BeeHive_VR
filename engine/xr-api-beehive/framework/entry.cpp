@@ -84,14 +84,16 @@ XrResult __declspec(dllexport) XRAPI_CALL
     // discoverable from one place. The OpenXR layer is the "engine" component.
     localAppData = std::filesystem::path(getenv("LOCALAPPDATA")) / "BeeHive_VR";
     CreateDirectoryA(localAppData.string().c_str(), nullptr);
+    const auto logsDir = localAppData / "logs";
+    CreateDirectoryA(logsDir.string().c_str(), nullptr);
 
     // Start logging to file. Filename = "engine.log" so it sits alongside
-    // future "app.log", "companion.log", etc. F3 (5.6.2026): bei >3 MB
+    // app.log and atlas.log in the logs/ subfolder. F3 (5.6.2026): bei >3 MB
     // einmal nach .old rotieren bevor der Stream geöffnet wird — analog
     // zur Atlas-/WPF-Logger-Politik. Runtime-Rotation in log.cpp deckt
     // ultra-lange Sessions ab.
     if (!logStream.is_open()) {
-        std::filesystem::path logFile = localAppData / "engine.log";
+        std::filesystem::path logFile = logsDir / "engine.log";
         try {
             if (std::filesystem::exists(logFile) &&
                 std::filesystem::file_size(logFile) > (3 * 1024 * 1024)) {

@@ -105,11 +105,9 @@ public partial class SettingsPage : UserControl
 
     private void DevOpenSettingsFile_Click(object sender, RoutedEventArgs e)
     {
-        var appData = System.Environment.GetFolderPath(System.Environment.SpecialFolder.LocalApplicationData);
-        var folder = System.IO.Path.Combine(appData, BeeHiveVR.Services.Logger.AppDataFolderName);
-        var path = System.IO.Path.Combine(folder, "settings.json");
+        var path = BeeHiveVR.Services.SettingsStore.SettingsFile;
         // Falls die Datei noch nicht existiert (frischer Start, noch nichts gespeichert) leer anlegen
-        System.IO.Directory.CreateDirectory(folder);
+        System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
         if (!System.IO.File.Exists(path))
             System.IO.File.WriteAllText(path, "{}");
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo

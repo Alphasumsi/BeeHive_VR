@@ -104,18 +104,18 @@
                                 CornerRadius="6" Background="{StaticResource BgSecondary}"
                                 Padding="14,12" Margin="0,0,0,16">
                             <StackPanel>
-                                <!-- Auto-create layout -->
+                                <!-- Use default as template for new car layouts -->
                                 <Grid Margin="0,4,0,4">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                        <TextBlock Text="Auto-create layout when new car is detected"
+                                        <TextBlock Text="Use default layout as template for new cars"
                                                    FontSize="13" FontWeight="SemiBold"/>
-                                        <TextBlock Text="If off, layout is only created on first edit"
+                                        <TextBlock Text="When iRacing detects an unknown car, copy the default's overlays into the new car-specific layout."
                                                    FontSize="11" Foreground="{StaticResource TextTertiary}"
-                                                   Margin="0,2,0,0"/>
+                                                   Margin="0,2,0,0" TextWrapping="Wrap"/>
                                     </StackPanel>
                                     <CheckBox Grid.Column="1" IsChecked="{Binding AutoCreateLayoutOnNewCar}"
                                               Style="{StaticResource ToggleSwitch}"

@@ -239,26 +239,68 @@
             <TextBlock Style="{StaticResource SectionLabel}" Text="OVERLAYS"
                        Margin="0,0,0,8"/>
 
-            <!-- Empty-State: nur sichtbar wenn keine Overlays -->
+            <!-- Empty-State / Onboarding: nur sichtbar wenn keine Overlays in der
+                 aktuellen Session liegen. Praktisch nur beim Erst-Setup zu sehen —
+                 sobald in Default ein Overlay liegt wird es überall vorbereitet. -->
             <Border BorderBrush="{StaticResource BorderTertiary}"
                     BorderThickness="1"
                     CornerRadius="6"
-                    Padding="20,30"
+                    Padding="24,22"
                     Margin="0,4,0,8"
                     Background="Transparent"
                     Visibility="{Binding DataContext.EditSources,
                                  RelativeSource={RelativeSource AncestorType=Window},
                                  Converter={StaticResource CountToEmpty}}">
-                <StackPanel HorizontalAlignment="Center">
-                    <TextBlock Text="No overlays here yet"
-                               FontSize="14"
-                               Foreground="{StaticResource TextSecondary}"
-                               HorizontalAlignment="Center"
-                               Margin="0,0,0,4"/>
-                    <TextBlock Text='Click "+ Add overlay" below to start.'
-                               FontSize="12"
-                               Foreground="{StaticResource TextTertiary}"
-                               HorizontalAlignment="Center"/>
+                <StackPanel MaxWidth="680" HorizontalAlignment="Left">
+                    <TextBlock Text="Welcome: How to set up your first VR layout"
+                               FontSize="16" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextPrimary}"
+                               Margin="0,0,0,14"/>
+
+                    <!-- Welcome Text -->
+                    <TextBlock Margin="0,0,0,12" TextWrapping="Wrap"
+                               FontSize="12" Foreground="{StaticResource TextSecondary}">
+                        <Run Text="1 · Start iRacing and load into a session." FontWeight="SemiBold"
+                             Foreground="{StaticResource TextPrimary}"/>
+                        <LineBreak/>
+                        <Run Text="Each car you drive gets its own layout. iRacing detects the active car and switches the editor to that car automatically. Your overlays follow you per car."/>
+                    </TextBlock>
+
+                    <TextBlock Margin="0,0,0,12" TextWrapping="Wrap"
+                               FontSize="12" Foreground="{StaticResource TextSecondary}">
+                        <Run Text="2 · This is the Template (default) layout." FontWeight="SemiBold"
+                             Foreground="{StaticResource TextPrimary}"/>
+                        <LineBreak/>
+                        <Run Text="The overlays you place here are copied as a starting template into every new car-specific layout the moment iRacing reports an unknown car. Fine-tune per-car layouts later without touching the Template."/>
+                    </TextBlock>
+
+                    <TextBlock Margin="0,0,0,4" TextWrapping="Wrap"
+                               FontSize="12" Foreground="{StaticResource TextSecondary}">
+                        <Run Text="3 · Add overlays:" FontWeight="SemiBold"
+                             Foreground="{StaticResource TextPrimary}"/>
+                    </TextBlock>
+                    <TextBlock Margin="14,0,0,4" TextWrapping="Wrap"
+                               FontSize="12" Foreground="{StaticResource TextSecondary}">
+                        <Run Text="•"/>
+                        <Run Text="„+ Add overlay" FontWeight="SemiBold"/><Run Text="&quot; below: Paste any URL (SimHub, OBS-Source, custom HTML) or capture an existing desktop window."/>
+                    </TextBlock>
+                    <TextBlock Margin="14,0,0,12" TextWrapping="Wrap"
+                               FontSize="12" Foreground="{StaticResource TextSecondary}">
+                        <Run Text="•"/>
+                        <Run Text="Dashies" FontWeight="SemiBold"/><Run Text=" tab on the left: Built-in widgets (Relative, Track Map, Inputs, Standings …). Enable "/><Run Text="„Set as active&quot;" FontWeight="SemiBold"/><Run Text=" on a widget, then click "/><Run Text="„Add to layout&quot;" FontWeight="SemiBold"/><Run Text=" — the widget is transferred into the active session here."/>
+                    </TextBlock>
+
+                    <TextBlock Margin="0,0,0,12" TextWrapping="Wrap"
+                               FontSize="12" Foreground="{StaticResource TextSecondary}">
+                        <Run Text="4 · Sessions are separate." FontWeight="SemiBold"
+                             Foreground="{StaticResource TextPrimary}"/>
+                        <LineBreak/>
+                        <Run Text="Practice, Qualify, Race and Test Drive each carry their own overlay set - switch with the pills above. Use „All Sessions&quot; to add or edit across all four at once."/>
+                    </TextBlock>
+
+                    <TextBlock TextWrapping="Wrap" FontStyle="Italic"
+                               FontSize="12" Foreground="{StaticResource TextTertiary}"
+                               Text="Once you've placed an overlay here, this panel disappears."/>
                 </StackPanel>
             </Border>
 
@@ -284,7 +326,7 @@
                                             <Setter Property="BorderBrush"
                                                     Value="{StaticResource AccentBorder}"/>
                                         </DataTrigger>
-                                        <!-- Phase 3 (5.6.2026): VR-Hover/Grab → kräftiger Akzent-
+                                        <!-- VR-Hover/Grab → kräftiger Akzent-
                                              Rahmen + Tab-weite Hintergrundfärbung. Persistent bis ein
                                              anderer Quad im HMD gehovered wird. Wenn IsHighlighted
                                              UND IsDragging beide an sind, gewinnt IsDragging weil es

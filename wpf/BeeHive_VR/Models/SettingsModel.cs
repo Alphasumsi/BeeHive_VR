@@ -5,14 +5,18 @@ namespace BeeHiveVR.Models;
 
 /// <summary>
 /// App-weite Einstellungen, persistiert nach
-/// %LOCALAPPDATA%\BeeHiveVR\settings.json.
+/// %LOCALAPPDATA%\BeeHive_VR\settings\settings.json.
 /// </summary>
 public class SettingsModel
 {
     // --- General ----------------------------------------------------------
     /// <summary>
-    /// true = Layout sofort anlegen sobald die Engine ein neues Auto meldet.
-    /// false = Layout erst beim ersten Edit anlegen.
+    /// Steuert was im neuen Car-Layout drin steht wenn iRacing ein bislang
+    /// unbekanntes Auto meldet — Layout-Anlage selbst läuft immer.
+    /// true  = Sources aller 4 Sessions aus dem Default-Layout 1:1 kopieren
+    ///         (mit frischen IDs). User sieht sofort Overlays.
+    /// false = Sessions leer; User fängt bei null an.
+    /// JSON-Key bleibt aus Kompatibilitätsgründen `autoCreateLayoutOnNewCar`.
     /// </summary>
     [JsonPropertyName("autoCreateLayoutOnNewCar")]
     public bool AutoCreateLayoutOnNewCar { get; set; } = true;

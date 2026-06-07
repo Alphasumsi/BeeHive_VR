@@ -7,22 +7,24 @@ namespace BeeHiveVR.Services;
 
 /// <summary>
 /// Verwaltet die App-Einstellungen. Persistiert nach
-/// <c>%LOCALAPPDATA%\BeeHiveVR\settings.json</c>.
+/// <c>%LOCALAPPDATA%\BeeHiveVR\settings\settings.json</c>.
+/// Altpfad <c>…\BeeHiveVR\settings.json</c> wird beim ersten Load nach
+/// <c>settings\settings.json</c> migriert.
 /// </summary>
 public static class SettingsStore
 {
     /// <summary>Aktuelle Einstellungen — Default beim Start, wird von Load() überschrieben.</summary>
     public static SettingsModel Current { get; set; } = new();
 
-    /// <summary>Pfad zur settings.json (parallel zu configs-Ordner).</summary>
-    public static string SettingsFile
-    {
-        get
-        {
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            return Path.Combine(appData, Logger.AppDataFolderName, "settings.json");
-        }
-    }
+    private static string AppDataRoot => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+        Logger.AppDataFolderName);
+
+    /// <summary>Pfad zur settings.json (im settings-Subfolder).</summary>
+    public static string SettingsFile => Path.Combine(AppDataRoot, "settings", "settings.json");
+
+    /// <summary>Alt-Pfad (Migration). Vor 0.8.6 lag die Datei direkt im Root.</summary>
+    private static string LegacySettingsFile => Path.Combine(AppDataRoot, "settings.json");
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -33,6 +35,21 @@ public static class SettingsStore
     /// <summary>Lädt die Settings aus der JSON-Datei. Bei Fehler/Missing bleiben Default-Werte.</summary>
     public static void Load()
     {
+        // Migration: alte settings.json einmalig in den neuen Subfolder umziehen.
+        try
+        {
+            if (!File.Exists(SettingsFile) && File.Exists(LegacySettingsFile))
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(SettingsFile)!);
+                File.Move(LegacySettingsFile, SettingsFile);
+                Logger.Info($"SettingsStore: migrated {LegacySettingsFile} → {SettingsFile}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"SettingsStore: legacy migration failed: {ex.Message}");
+        }
+
         var path = SettingsFile;
         if (!File.Exists(path))
         {

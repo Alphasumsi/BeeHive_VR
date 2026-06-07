@@ -6,12 +6,14 @@ using System.Text.Json.Nodes;
 namespace BeeHiveVR.Services;
 
 /// <summary>
-/// BeeHive-VR-eigene irdashies-Config (Lesen UND Schreiben), damit irdashies nicht mehr
-/// installiert sein muss. Quelle: %LOCALAPPDATA%\BeeHiveVR\irdashies-config.json
+/// BeeHive-VR-eigene Dashies-Config (Lesen UND Schreiben), damit irdashies nicht mehr
+/// installiert sein muss. Quelle: %LOCALAPPDATA%\BeeHive_VR\settings\dashies-config.json
 /// (Format wie irdashies: { currentProfile, dashboards:{ default:{widgets,generalSettings} } }).
 ///
-/// Beim ersten Mal Migration aus %APPDATA%\irdashies\config.json (falls vorhanden),
-/// sonst Fallback aus der eingebetteten dashies-dist\dashboard.json → Minimal.
+/// Beim ersten Mal Migration in dieser Reihenfolge:
+///   1) Alt-Pfad %LOCALAPPDATA%\BeeHive_VR\irdashies-config.json (vor 0.8.6)
+///   2) %APPDATA%\irdashies\config.json (Original-irdashies-Installation)
+///   3) Eingebettete dashies-dist\dashboard.json → Minimal-Fallback.
 ///
 /// Genutzt von: IrdashiesAdapterService (Lesen, BuildDashboard) und dem Dashies-Tab
 /// (Schreiben einzelner Widget-Configs).
@@ -24,9 +26,14 @@ public sealed class IrdashiesConfigStore
     private readonly object _gate = new();
     private JsonObject? _root;
 
-    private static string LocalConfigPath => Path.Combine(
+    private static string AppDataRoot => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        Logger.AppDataFolderName, "irdashies-config.json");
+        Logger.AppDataFolderName);
+
+    private static string LocalConfigPath => Path.Combine(AppDataRoot, "settings", "dashies-config.json");
+
+    /// <summary>Alt-Pfad vor 0.8.6 (Migration). Lag direkt im Root + hieß noch irdashies-config.json.</summary>
+    private static string LegacyLocalConfigPath => Path.Combine(AppDataRoot, "irdashies-config.json");
 
     private static string IrdashiesConfigPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -135,14 +142,25 @@ public sealed class IrdashiesConfigStore
     {
         if (_root != null) return;
 
-        // 1) BeeHive-VR-eigene Config
+        // 1) Neue BeeHive-VR-eigene Config (settings/dashies-config.json)
         if (TryLoadFile(LocalConfigPath, out var root))
         {
             _root = root;
             return;
         }
 
-        // 2) Einmal-Migration aus dem Original-irdashies
+        // 2) Alt-Pfad migrieren (irdashies-config.json im Root vor 0.8.6).
+        //    Datei wird beim ersten Save() automatisch in den neuen Pfad gespeichert.
+        if (TryLoadFile(LegacyLocalConfigPath, out var legacy))
+        {
+            _root = legacy;
+            Logger.Info($"IrdashiesConfigStore: migrated {LegacyLocalConfigPath} → {LocalConfigPath}");
+            Save();
+            try { File.Delete(LegacyLocalConfigPath); } catch { /* nicht kritisch */ }
+            return;
+        }
+
+        // 3) Einmal-Migration aus dem Original-irdashies
         if (TryLoadFile(IrdashiesConfigPath, out var migrated))
         {
             _root = migrated;
@@ -151,7 +169,7 @@ public sealed class IrdashiesConfigStore
             return;
         }
 
-        // 3) Fallback: generierte Baseline aus honey-dist
+        // 4) Fallback: generierte Baseline aus honey-dist
         if (TryLoadFile(FallbackDashboardPath, out var fb) && fb != null)
         {
             // dashboard.json ist ein DashboardLayout (kein Hüllen-Objekt) → einwickeln.
@@ -165,7 +183,7 @@ public sealed class IrdashiesConfigStore
             return;
         }
 
-        // 4) Minimal
+        // 5) Minimal
         _root = new JsonObject
         {
             ["currentProfile"] = "default",
