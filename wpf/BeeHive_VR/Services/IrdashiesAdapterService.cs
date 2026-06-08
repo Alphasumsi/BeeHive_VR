@@ -472,6 +472,22 @@ public sealed class IrdashiesAdapterService
         result["SessionTimeRemain"] = V(new[] { System.Math.Max(0.0, 3600.0 - t) });
         result["SessionLapsRemain"] = V(new[] { System.Math.Max(0, 40 - (lapNum - 1)) });
 
+        // --- LapTimeDeltas-Mock: Standings/Relative-Spalte braucht eine wachsende
+        //     History pro Auto. useLapTimesStoreUpdater pusht eine History-Entry
+        //     pro Auto sobald sich der Wert ändert. Wir tickern alle 4 s einen
+        //     neuen Wert pro Slot mit sinus-Variation → nach ~16 s sind 3 Deltas
+        //     je Nicht-Player-Fahrer da, Vorzeichen wechseln.
+        const double previewLapDur = 4.0;
+        int previewLapTick = (int)(t / previewLapDur);
+        var lastLapTimes = new float[64];
+        for (int i = 0; i < 64; i++)
+        {
+            double basePace = 90.0 + (i % 8) * 0.15;
+            double jitter = System.Math.Sin(i * 0.7 + previewLapTick * 0.4) * 0.6;
+            lastLapTimes[i] = (float)(basePace + jitter);
+        }
+        result["CarIdxLastLapTime"] = V(lastLapTimes);
+
         // --- Blind-Spot-Mock: angelehnt an irdashies CarsPassingBothSidesAnimation
         //     (Storybook): beide Marker laufen linear synchron von -1 nach +1 in 5 s,
         //     dann Snap zurück auf -1. Bei uns über CarIdxLapDistPct gefüttert, weil
