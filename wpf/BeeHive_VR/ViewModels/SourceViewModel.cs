@@ -1,7 +1,11 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using System;
+using System.Text.Json.Nodes;
+using System.Web;
 using System.Windows.Input;
 using System.Xml.Linq;
 using BeeHiveVR.Models;
+using BeeHiveVR.Services;
 
 namespace BeeHiveVR.ViewModels;
 
@@ -52,6 +56,78 @@ public partial class SourceViewModel : ObservableObject
     /// stabilisiert ist (Hover ≥ 150 ms) ODER aktuell gegrabbt wird. UI-State
     /// für die Source-Listen-Pille (Highlight), nicht persistiert.</summary>
     [ObservableProperty] private bool _isHighlighted = false;
+
+    // ---- Dashies-Background-Opacity (Per-Widget global in irdashies-config.json) ----
+    // IsDashie + DashieWidgetId leiten sich aus Target ab (URL ?widget=<id>).
+    // DashieBgOpacity liest/schreibt direkt in den IrdashiesConfigStore — der
+    // Slider in der LayoutPage-Source-Card patcht damit dieselbe Config wie früher
+    // der DashiesPage-Slider, und broadcastet `dashboardUpdated` für Live-Update
+    // in allen Atlas-iframes + Preview.
+    public bool IsDashie
+    {
+        get
+        {
+            var id = ParseWidgetIdFromTarget();
+            // TrackMap hat keinen Background-CSS-Container — Slider wäre wirkungslos.
+            return id != null && id != "map";
+        }
+    }
+
+    public string? DashieWidgetId => ParseWidgetIdFromTarget();
+
+    private string? ParseWidgetIdFromTarget()
+    {
+        if (string.IsNullOrEmpty(Target) ||
+            !Target.Contains("/dashie.html", StringComparison.OrdinalIgnoreCase))
+            return null;
+        try
+        {
+            var uri = new Uri(Target);
+            return HttpUtility.ParseQueryString(uri.Query)["widget"];
+        }
+        catch { return null; }
+    }
+
+    public float DashieBgOpacity
+    {
+        get
+        {
+            var widgetId = DashieWidgetId;
+            if (widgetId == null) return 0f;
+            var cfg = IrdashiesConfigStore.Instance.GetWidgetConfig(widgetId);
+            try
+            {
+                if (cfg?["background"]?["opacity"] is JsonNode op)
+                    return (float)(op.GetValue<double>() / 100.0);
+            }
+            catch { }
+            return 0f;
+        }
+        set
+        {
+            var widgetId = DashieWidgetId;
+            if (widgetId == null) return;
+            int pct = (int)System.Math.Round(System.Math.Clamp(value, 0f, 1f) * 100f);
+            IrdashiesConfigStore.Instance.PatchWidgetConfig(widgetId, cfg =>
+            {
+                if (cfg["background"] is not JsonObject bg)
+                {
+                    bg = new JsonObject();
+                    cfg["background"] = bg;
+                }
+                bg["opacity"] = JsonValue.Create(pct);
+            });
+            IrdashiesAdapterService.Instance.BroadcastDashboardUpdated();
+            OnPropertyChanged();
+        }
+    }
+
+    partial void OnTargetChanged(string value)
+    {
+        OnPropertyChanged(nameof(IsDashie));
+        OnPropertyChanged(nameof(DashieWidgetId));
+        OnPropertyChanged(nameof(DashieBgOpacity));
+    }
 
     // Backup vom Namen für Cancel-Funktion (Esc beim Editieren)
     private string _nameBackup = "";

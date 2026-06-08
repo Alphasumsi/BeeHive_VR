@@ -36,26 +36,30 @@ const FrameSlot = koffi.struct('FrameSlot', {
 const FRAME_SLOT_SIZE: number = koffi.sizeof(FrameSlot);
 
 // QuadSlot — one entry per sub-region of the atlas. Byte-for-byte match
-// with the C++ side (76 bytes). The trailing 4 bytes carry per-quad opacity
-// (was `reserved` before C4 Transparenz) — Layer-Compute-Shader nimmt das
-// als Multiplier auf RGB+Alpha.
+// with the C++ side (80 bytes). The trailing 8 bytes carry per-quad
+// opacity (C4 Transparenz, Layer-Compute-Shader-Multiplier) und bgOpacity
+// (CTRL+ALT-Drag-Init: aktueller CSS-Background-Opacity-Wert aus
+// irdashies-config.json, damit der Layer beim Grab-Start nicht auf 0
+// springt). Layer wendet bgOpacity selbst NICHT an — der CSS-Pfad geht
+// iframe→atlas-texture→compute-shader.
 const QuadSlot = koffi.struct('QuadSlot', {
-  id:       koffi.array('char', 16),  // ASCII, NUL-terminated, for logging
-  rectX:    'uint32_t',
-  rectY:    'uint32_t',
-  rectW:    'uint32_t',
-  rectH:    'uint32_t',
-  posX:     'float32',
-  posY:     'float32',
-  posZ:     'float32',
-  quatX:    'float32',
-  quatY:    'float32',
-  quatZ:    'float32',
-  quatW:    'float32',
-  sizeW:    'float32',
-  sizeH:    'float32',
-  visible:  'uint32_t',
-  opacity:  'float32',  // 0..1, default 1.0 (war reserved bis C4)
+  id:        koffi.array('char', 16),  // ASCII, NUL-terminated, for logging
+  rectX:     'uint32_t',
+  rectY:     'uint32_t',
+  rectW:     'uint32_t',
+  rectH:     'uint32_t',
+  posX:      'float32',
+  posY:      'float32',
+  posZ:      'float32',
+  quatX:     'float32',
+  quatY:     'float32',
+  quatZ:     'float32',
+  quatW:     'float32',
+  sizeW:     'float32',
+  sizeH:     'float32',
+  visible:   'uint32_t',
+  opacity:   'float32',  // 0..1, default 1.0 (war reserved bis C4)
+  bgOpacity: 'float32',  // 0..1, default 0.0 (BG Opacity Drag-Init)
 });
 const QUAD_SLOT_SIZE: number = koffi.sizeof(QuadSlot);
 
@@ -122,6 +126,7 @@ export interface QuadDesc {
   sizeH:  number;     // meters
   visible?: boolean;
   opacity?: number;   // 0..1, default 1.0
+  bgOpacity?: number; // 0..1, default 0.0
 }
 
 class SharedFrameChannel {
@@ -157,7 +162,7 @@ class SharedFrameChannel {
       rectX: 0, rectY: 0, rectW: 0, rectH: 0,
       posX: 0, posY: 0, posZ: 0,
       quatX: 0, quatY: 0, quatZ: 0, quatW: 1,
-      sizeW: 0, sizeH: 0, visible: 0, opacity: 1.0,
+      sizeW: 0, sizeH: 0, visible: 0, opacity: 1.0, bgOpacity: 0.0,
     };
     for (let i = 0; i < MAX_QUADS; i++) {
       const offset = FRAME_SLOT_SIZE + i * QUAD_SLOT_SIZE;
@@ -203,8 +208,9 @@ class SharedFrameChannel {
         quatW:    q.quatW ?? 1,
         sizeW:    q.sizeW,
         sizeH:    q.sizeH,
-        visible:  (q.visible ?? true) ? 1 : 0,
-        opacity:  q.opacity ?? 1.0,
+        visible:   (q.visible ?? true) ? 1 : 0,
+        opacity:   q.opacity ?? 1.0,
+        bgOpacity: q.bgOpacity ?? 0.0,
       });
     }
   }

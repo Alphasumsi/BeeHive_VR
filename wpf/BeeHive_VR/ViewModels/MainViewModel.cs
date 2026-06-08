@@ -836,6 +836,11 @@ public partial class MainViewModel : ObservableObject
                 Target  = string.IsNullOrEmpty(s.Target) ? null : s.Target,
                 // C4: Opacity-Slider treibt RGB+Alpha-Multiplier im Layer-Compute-Shader.
                 Opacity = s.Opacity,
+                // BG Opacity (CTRL+ALT-Drag): per-Widget global aus irdashies-config.json.
+                // Layer braucht den Wert pro Quad-Slot um m_dragBgOpacity beim Grab-Start
+                // zu initialisieren — sonst springt der Wert auf 0 wenn der User CTRL+ALT
+                // drückt. SourceModel persistiert das nicht (zentrale Config gewinnt).
+                BgOpacity = LookupBgOpacityFromConfig(s.Target),
                 // C3b: Wunsch-Pixelgröße fürs Atlas-Packing. 0 = kein User-Wert →
                 // Electron nimmt seinen Default. Sonst exakt das was auch die
                 // Preview im browser-host nutzt, damit HMD-Render scharf ist.
@@ -848,6 +853,27 @@ public partial class MainViewModel : ObservableObject
                 Type    = s.Type == SourceType.Window ? "window" : "browser",
             };
         }
+    }
+
+    // Holt den aktuellen BG-Opacity-Wert (0..1) für einen Dashie aus dem
+    // IrdashiesConfigStore. Target = "…/dashie.html?widget=<id>". 0 wenn kein
+    // Dashie oder kein Background-Field gesetzt.
+    private static float LookupBgOpacityFromConfig(string? target)
+    {
+        if (string.IsNullOrEmpty(target) ||
+            !target.Contains("/dashie.html", StringComparison.OrdinalIgnoreCase))
+            return 0f;
+        try
+        {
+            var uri = new Uri(target);
+            var widgetId = System.Web.HttpUtility.ParseQueryString(uri.Query)["widget"];
+            if (string.IsNullOrEmpty(widgetId)) return 0f;
+            var cfg = Services.IrdashiesConfigStore.Instance.GetWidgetConfig(widgetId);
+            if (cfg?["background"]?["opacity"] is System.Text.Json.Nodes.JsonNode op)
+                return (float)(op.GetValue<double>() / 100.0);
+        }
+        catch { }
+        return 0f;
     }
 
     // Yaw (um Y) + Pitch (um X) in Grad → quaternion {qx, qy, qz, qw}.
@@ -1348,6 +1374,10 @@ public partial class MainViewModel : ObservableObject
             // (heute nie — siehe PlaceUpdate.Opacity Nullable + main.ts schickt
             // das Feld nicht). Schützt den User-Slider vor 0-Reset bei Drag.
             if (pu.Opacity.HasValue) src.Opacity = pu.Opacity.Value;
+            // CTRL+ALT-Drag treibt BG Opacity. Setter patcht irdashies-config +
+            // BroadcastDashboardUpdated → iframe rendert CSS live nach (Latenz
+            // ~100-300 ms da der Pfad Layer→Atlas→WPF→WS→React→CSS→Texture geht).
+            if (pu.BgOpacity.HasValue) src.DashieBgOpacity = pu.BgOpacity.Value;
         }
         finally { _suppressEnginePush = prev; }
 

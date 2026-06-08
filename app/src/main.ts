@@ -409,7 +409,8 @@ function applyWpfLayout(quads: AtlasQuadFromWpf[]): void {
     slot.posX  = q.posX;  slot.posY  = q.posY;  slot.posZ  = q.posZ;
     slot.quatX = q.quatX; slot.quatY = q.quatY; slot.quatZ = q.quatZ; slot.quatW = q.quatW;
     slot.sizeW = q.sizeW; slot.sizeH = q.sizeH;
-    slot.opacity = q.opacity ?? 1.0;
+    slot.opacity   = q.opacity   ?? 1.0;
+    slot.bgOpacity = q.bgOpacity ?? 0.0;
     wpfVisibleById.set(q.id, q.visible);
     if (q.target) slotTargetById.set(q.id, q.target);
     if (q.name)   slotNameById.set(q.id, q.name);
@@ -814,6 +815,10 @@ app.whenReady().then(() => {
       // m_dragOpacity). WPF EngineLink-Parser FOpt erkennt das Feld und
       // setzt src.Opacity → Slider folgt live.
       opacity:   u.opacity,
+      // 7.6.2026: CTRL+ALT-Drag schreibt m_dragBgOpacity. WPF setzt damit
+      // src.DashieBgOpacity → patcht irdashies-config.json + broadcastet
+      // dashboardUpdated → iframe rendert CSS live nach.
+      bgOpacity: u.bgOpacity,
       // Phase 3: stabilisierte Hover/Grab-Id für WPF-Pille-Highlight.
       hoveredId: u.hoveredId,
     });

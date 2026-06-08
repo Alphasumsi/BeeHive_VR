@@ -765,6 +765,48 @@
                                                      Height="26"/>
                                         </Grid>
 
+                                        <!-- Dashie-only: Background-Opacity (CSS bg im Widget,
+                                             unabhängig von der Quad-Opacity oben). Patcht
+                                             irdashies-config.json pro Widget global. -->
+                                        <Grid Margin="0,0,0,12"
+                                              Visibility="{Binding IsDashie, Converter={StaticResource BoolToVis}}">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="90"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="64"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="BG Opacity" FontSize="13"
+                                                       Foreground="{StaticResource TextSecondary}"
+                                                       VerticalAlignment="Center"
+                                                       ToolTip="Hintergrund-Box im Widget (Text bleibt 100%) — VR: CTRL+ALT-Drag"/>
+                                            <Slider Grid.Column="1" Minimum="0" Maximum="1"
+                                                    Value="{Binding DashieBgOpacity}" Margin="6,0"/>
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal"
+                                                        VerticalAlignment="Center" Margin="0,0,6,0">
+                                                <Button Tag="DashieBgOpacity:-" Click="Nudge_Click"
+                                                        ToolTip="1%   +CTRL:  −10%"
+                                                        Width="22" Height="26" Padding="0">
+                                                    <Path Stroke="{StaticResource TextPrimary}"
+                                                          StrokeThickness="2"
+                                                          SnapsToDevicePixels="True"
+                                                          Data="M0,2 H10"/>
+                                                </Button>
+                                                <Button Tag="DashieBgOpacity:+" Click="Nudge_Click"
+                                                        ToolTip="1%   +CTRL:  +10%"
+                                                        Width="22" Height="26" Padding="0"
+                                                        Margin="3,0,0,0">
+                                                    <Path Stroke="{StaticResource TextPrimary}"
+                                                          StrokeThickness="2"
+                                                          SnapsToDevicePixels="True"
+                                                          Data="M0,5 H10 M5,0 V10"/>
+                                                </Button>
+                                            </StackPanel>
+                                            <TextBox Grid.Column="3"
+                                                     Text="{Binding DashieBgOpacity, StringFormat={}{0:P1}}"
+                                                     Height="26"/>
+                                        </Grid>
+
                                         <!-- Browser-only: Pixelgröße fürs WebView2-Fenster.
                                              0 = Auto-Fit (vom JS gesucht; nicht zuverlässig bei fluiden Pages). -->
                                         <Grid Margin="0,0,0,12">

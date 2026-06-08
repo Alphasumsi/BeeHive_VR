@@ -132,6 +132,10 @@ public partial class LayoutPage : UserControl
                 // Anzeige in % (0–100); Schritt normal 1 %, Ctrl 10 %, Shift 0.1 %.
                 src.Opacity = Nudge(src.Opacity, pick(0.001f, 0.01f, 0.10f), minus, 0f, 1f, dec(2));
                 break;
+            case "DashieBgOpacity":
+                // Hintergrund-Box im Dashie-Widget, gleiche Schrittweite wie Quad-Opacity.
+                src.DashieBgOpacity = Nudge(src.DashieBgOpacity, pick(0.001f, 0.01f, 0.10f), minus, 0f, 1f, dec(2));
+                break;
         }
     }
 

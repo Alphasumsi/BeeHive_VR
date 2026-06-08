@@ -35,6 +35,11 @@ export interface AtlasQuadFromWpf {
   // 0..1 Multiplier auf RGB+Alpha, getrieben vom LayoutPage-Opacity-Slider.
   // Default 1.0 (voll deckend). Compute-Shader im Layer wendet das pro Quad an.
   opacity?: number;
+  // 0..1 BG Opacity (CSS-Background im Dashie-Widget). Aus irdashies-config.json
+  // per-Widget global. WPF stopft den aktuellen Wert in den AtlasQuad damit der
+  // Layer beim CTRL+ALT-Grab-Start m_dragBgOpacity korrekt initialisiert.
+  // Default 0.0 = transparent.
+  bgOpacity?: number;
   // C3b (4.6.2026): Wunsch-Pixel-Größe des Widgets im Atlas. Electron-Packer
   // sucht damit einen Slot, ist authoritativ für die Ist-Position (rectX/Y) im
   // QuadSlot. 0/undefined → Default 512×384.

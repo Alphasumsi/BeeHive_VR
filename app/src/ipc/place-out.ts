@@ -25,7 +25,10 @@ const GetLastError = kernel32.func('uint32_t __stdcall GetLastError()');
 // opacity am Ende (B10 ALT-Drag) — Layer schreibt 8 floats statt 7, padding
 // shrinkt entsprechend von 44 auf 40. Phase 3 (5.6.2026): hoveredId an
 // Offset 56 (16 byte) — stabilisierter Hover oder Grab-Id; leer wenn nichts
-// aktiv. Padding shrinkt damit von 40 auf 24 Byte.
+// aktiv. Padding shrinkt damit von 40 auf 24 Byte. 7.6.2026: bgOpacity
+// (CTRL+ALT-Drag) als 9. float — 24+9*4=60 used, hoveredId weiter an Offset
+// 56 würde das überschneiden → hoveredId verschiebt auf Offset 60, padding
+// shrinkt von 24 auf 20 Byte.
 const PlaceOutStruct = koffi.struct('PlaceOut', {
   generation: 'uint64_t',
   id:         koffi.array('char', 16),
@@ -37,8 +40,9 @@ const PlaceOutStruct = koffi.struct('PlaceOut', {
   sizeW:      'float32',
   sizeH:      'float32',
   opacity:    'float32',
+  bgOpacity:  'float32',
   hoveredId:  koffi.array('char', 16),
-  padding:    koffi.array('uint8', 24),
+  padding:    koffi.array('uint8', 20),
 });
 
 const FILE_MAP_READ = 0x4;
@@ -61,6 +65,7 @@ interface PlaceOutRaw {
   sizeW:      number;
   sizeH:      number;
   opacity:    number;
+  bgOpacity:  number;
   hoveredId:  string;
 }
 
@@ -74,6 +79,7 @@ export interface PlaceUpdate {
   sizeW:     number;
   sizeH:     number;
   opacity:   number;
+  bgOpacity: number;
   // Phase 3 (5.6.2026): stabilisierter Hover oder Grab-Id; leer wenn nichts.
   // Atlas zeigt Sticker, WPF highlightet Source-Pille.
   hoveredId: string;
@@ -135,6 +141,7 @@ class PlaceOutReader extends EventEmitter {
       sizeW:     raw.sizeW,
       sizeH:     raw.sizeH,
       opacity:   raw.opacity,
+      bgOpacity: raw.bgOpacity,
       hoveredId,
     };
     this.emit('placeUpdate', u);

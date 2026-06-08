@@ -382,7 +382,7 @@ void main(uint2 tid : SV_DispatchThreadID)
         };
         static_assert(sizeof(FrameSlot) == 48, "FrameSlot must be exactly 48 bytes");
 
-        struct QuadSlot {               // 76 bytes
+        struct QuadSlot {               // 80 bytes
             char     id[16];
             uint32_t rectX;
             uint32_t rectY;
@@ -393,8 +393,13 @@ void main(uint2 tid : SV_DispatchThreadID)
             float    sizeW, sizeH;
             uint32_t visible;
             float    opacity;     // 0..1, default 1.0. War `reserved` bis C4.
+            float    bgOpacity;   // 0..1, default 0.0. CTRL+ALT-Drag-Init (7.6.2026).
+                                  // Layer wendet das selbst NICHT an (CSS-Pfad
+                                  // läuft iframe→atlas-tex→compute-shader); nur
+                                  // gelesen beim Grab-Start, damit m_dragBgOpacity
+                                  // beim CTRL+ALT-Druck nicht auf 0 springt.
         };
-        static_assert(sizeof(QuadSlot) == 76, "QuadSlot must be exactly 76 bytes");
+        static_assert(sizeof(QuadSlot) == 80, "QuadSlot must be exactly 80 bytes");
 
         static constexpr size_t kMaxQuads = 8;
         static constexpr size_t kMappingSize = sizeof(FrameSlot) + kMaxQuads * sizeof(QuadSlot);
@@ -1112,6 +1117,7 @@ void main(uint2 tid : SV_DispatchThreadID)
                 const bool kAlt   = (GetAsyncKeyState(VK_MENU)    & 0x8000) != 0;
                 int mod = -1;                   // XY
                 if (kCtrl && kShift) mod = 3;   // Yaw/Pitch (wrist)
+                else if (kCtrl && kAlt) mod = 4; // BG Opacity (CTRL+ALT, 7.6.2026)
                 else if (kAlt)       mod = 2;   // Opacity (B10, ALT)
                 else if (kCtrl)      mod = 0;   // Z
                 else if (kShift)     mod = 1;   // Scale
@@ -1132,6 +1138,7 @@ void main(uint2 tid : SV_DispatchThreadID)
                     m_dragYawRef   = m_dragYawDeg;
                     m_dragPitchRef = m_dragPitchDeg;
                     m_dragOpacityRef = m_dragOpacity;
+                    m_dragBgOpacityRef = m_dragBgOpacity;
                 }
 
                 constexpr float K_SCALE = 1.5f;             // multiplicative per meter forward
@@ -1153,10 +1160,20 @@ void main(uint2 tid : SV_DispatchThreadID)
                 }
                 case 2: {
                     // ALT = Opacity. Hand vorwärts (Quad-Richtung) → mehr deckend,
-                    // rückwärts → transparenter. K ist linear pro Meter, kann später
-                    // getunt werden falls zu sensibel / zu lasch.
-                    constexpr float K_OPACITY = 1.0f;
+                    // rückwärts → transparenter. K=2.0 (7.6.2026, User-Wunsch:
+                    // Controller-Weg halbiert) → 0.5 m Hand-Forward = volle 0→1.
+                    constexpr float K_OPACITY = 2.0f;
                     m_dragOpacity = std::clamp(m_dragOpacityRef + fwd * K_OPACITY, 0.f, 1.f);
+                    break;
+                }
+                case 4: {
+                    // CTRL+ALT = BG Opacity (CSS-Background des Dashie-Widgets).
+                    // Same K wie Opacity, gleicher Hand-Forward-Mapping. Layer rendert
+                    // den Wert NICHT live — er reist PlaceOut→Atlas→WPF→broadcast→iframe
+                    // (Latenz ~100-300 ms). Dafür ist der Wert persistent in der
+                    // irdashies-config.json sobald der Trigger losgelassen wird.
+                    constexpr float K_BG_OPACITY = 2.0f;
+                    m_dragBgOpacity = std::clamp(m_dragBgOpacityRef + fwd * K_BG_OPACITY, 0.f, 1.f);
                     break;
                 }
                 case 3:
@@ -1257,6 +1274,7 @@ void main(uint2 tid : SV_DispatchThreadID)
             m_dragQuatX = s.quatX; m_dragQuatY = s.quatY;
             m_dragQuatZ = s.quatZ; m_dragQuatW = s.quatW;
             m_dragOpacity = s.opacity;
+            m_dragBgOpacity = s.bgOpacity;
             QuatToYawPitchDeg({s.quatX, s.quatY, s.quatZ, s.quatW},
                               m_dragYawDeg, m_dragPitchDeg);
             char idLog[17] = {}; std::memcpy(idLog, m_grabTargetId, 16);
@@ -1275,20 +1293,21 @@ void main(uint2 tid : SV_DispatchThreadID)
             ++m_placeOutGen;
             std::memcpy(p + 0,  &m_placeOutGen, 8);
             std::memcpy(p + 8,  m_grabTargetId, 16);
-            // 8 floats — Opacity (B10 ALT-Drag) am Ende. Buffer ist 96 Byte,
-            // 24 + 8*4 = 56 verbraucht. Bis Phase 3: 40 Byte padding.
-            float f[8] = { m_dragPosX, m_dragPosY, m_dragPosZ,
+            // 9 floats — Opacity (B10 ALT-Drag) + bgOpacity (CTRL+ALT-Drag,
+            // 7.6.2026). Buffer ist 96 Byte, 24 + 9*4 = 60 verbraucht.
+            // hoveredId verschiebt von Offset 56 auf 60, padding 24→20.
+            float f[9] = { m_dragPosX, m_dragPosY, m_dragPosZ,
                            m_dragYawDeg, m_dragPitchDeg, m_dragSizeW, m_dragSizeH,
-                           m_dragOpacity };
+                           m_dragOpacity, m_dragBgOpacity };
             std::memcpy(p + 24, f, sizeof(f));
-            // Phase 3 (5.6.2026): hoveredId an Offset 56 (16 byte) — bei
+            // Phase 3 (5.6.2026): hoveredId an Offset 60 (16 byte) — bei
             // aktivem Grab automatisch der grabbed-Id; sonst der stabilisierte
             // Hover (oder leer). Atlas + WPF lesen das für Sticker bzw.
-            // Source-Listen-Highlight. Padding shrinkt von 40 auf 24 Byte.
+            // Source-Listen-Highlight.
             char hover[16] = {};
             if (m_grabHand != -1) std::memcpy(hover, m_grabTargetId, 16);
             else                  std::memcpy(hover, m_lastStableHoveredId, 16);
-            std::memcpy(p + 56, hover, 16);
+            std::memcpy(p + 60, hover, 16);
             std::memcpy(m_publishedHoverField, hover, 16);
         }
 
@@ -1671,6 +1690,8 @@ void main(uint2 tid : SV_DispatchThreadID)
         float       m_dragQuatX{0.f}, m_dragQuatY{0.f}, m_dragQuatZ{0.f}, m_dragQuatW{1.f};
         // B10 ALT-Opacity Drag-State.
         float       m_dragOpacity{1.f}, m_dragOpacityRef{1.f};
+        // CTRL+ALT BG-Opacity Drag-State (7.6.2026).
+        float       m_dragBgOpacity{0.f}, m_dragBgOpacityRef{0.f};
 
         // PlaceOut shared-memory section (layer → Electron). 96 bytes.
         HANDLE      m_placeOutMapping{nullptr};

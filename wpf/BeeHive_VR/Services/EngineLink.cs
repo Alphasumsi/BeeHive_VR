@@ -51,6 +51,13 @@ public sealed class AtlasQuadDto
     [JsonPropertyName("opacity")] public float Opacity { get; set; } = 1.0f;
 
     /// <summary>
+    /// 0..1 Background-Opacity des Dashie-Widgets (CSS `bg-slate-800/x%`).
+    /// Pro Quad in QuadSlot.bgOpacity reingeschrieben — Layer liest beim
+    /// CTRL+ALT-Grab-Start als m_dragBgOpacity-Init. Default 0.0 = transparent.
+    /// </summary>
+    [JsonPropertyName("bgOpacity")] public float BgOpacity { get; set; } = 0.0f;
+
+    /// <summary>
     /// Wunsch-Pixel-Größe des Widgets im Atlas (C3b, 4.6.2026). WPF liefert
     /// hier die vom User in der Layout-Page eingestellte PixelW/H (= das was
     /// die Preview im browser-host.exe nutzt). Electron-Packer bekommt den
@@ -94,6 +101,10 @@ public sealed class PlaceUpdate
     /// implementiert). Wenn null, lässt OnPlaceUpdate die Source-Opacity in
     /// Ruhe — sonst würde jeder Place-in-VR-Drag den Slider auf 0 ziehen.</summary>
     public float? Opacity { get; set; }
+    /// <summary>Nullable: nur gesetzt während CTRL+ALT-Drag (BG Opacity).
+    /// Layer schreibt m_dragBgOpacity in PlaceOut, Atlas forwarded. WPF
+    /// schreibt damit src.DashieBgOpacity (patcht irdashies-config.json).</summary>
+    public float? BgOpacity { get; set; }
     /// <summary>
     /// Phase 3 (5.6.2026): stabilisierter Hover oder Grab-Id; leer wenn kein
     /// Quad aktiv ist. MainViewModel highlightet die zugehörige Source-Pille.
@@ -334,6 +345,7 @@ public sealed class EngineLink
                                 Pitch = F("pitch"),
                                 Scale = F("scale"),
                                 Opacity = FOpt("opacity"),
+                                BgOpacity = FOpt("bgOpacity"),
                                 HoveredId = root.TryGetProperty("hoveredId", out var hid)
                                     ? hid.GetString() ?? "" : "",
                             };
