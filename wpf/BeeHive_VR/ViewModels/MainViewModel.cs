@@ -792,7 +792,15 @@ public partial class MainViewModel : ObservableObject
     // placeUpdate vom Layer mit derselben Id zurück und FindLiveSourceById
     // greift. Cap = Layer-kMaxQuads (C3b, 4.6.2026: von 3 auf 8 gelüftet
     // nachdem Electron dynamisch packt + Atlas-Window per setSize wächst).
-    private const int AtlasSlotsAvailable = 8;
+    // 10.6.2026: 8→12 — mehr Headroom für komplexe Layouts. Synchron mit C++
+    // kMaxQuads (engine/xr-api-beehive/layer.cpp) und JS MAX_QUADS (app/src/
+    // ipc/shared-frame.ts) — alle drei müssen identisch sein.
+    public const int AtlasSlotsAvailable = 12;
+
+    /// <summary>Bindbarer Spiegel von <see cref="AtlasSlotsAvailable"/> für den
+    /// Slot-Counter in LayoutPage. Ein normales {Binding} konvertiert int→string
+    /// (Run.Text); ein {x:Static} auf die const tut das NICHT → XamlParseException.</summary>
+    public int AtlasSlotsAvailableDisplay => AtlasSlotsAvailable;
 
     // Default-Pixel-Größe pro Quad wenn der User noch keine PixelW/H gesetzt
     // hat (SourceModel.PixelWidth=0). 512×384 ist der bisherige p1/p2-Slot —
@@ -1377,7 +1385,16 @@ public partial class MainViewModel : ObservableObject
             // CTRL+ALT-Drag treibt BG Opacity. Setter patcht irdashies-config +
             // BroadcastDashboardUpdated → iframe rendert CSS live nach (Latenz
             // ~100-300 ms da der Pfad Layer→Atlas→WPF→WS→React→CSS→Texture geht).
-            if (pu.BgOpacity.HasValue) src.DashieBgOpacity = pu.BgOpacity.Value;
+            // WICHTIG: Atlas forwarded bgOpacity in JEDEM PlaceUpdate (auch
+            // XY/Z/Yaw/Scale-Drag), Setter macht aber synchronen JSON-Disk-Write.
+            // Ohne Skip = 90 Hz Disk-Write-Storm → UI hängt → PushAtlasLayout zu
+            // spät → QuadSlot stale → Layer rendert beim Release alte Pose →
+            // Snap-Back zum Ursprung. Daher nur bei materieller Änderung patchen.
+            if (pu.BgOpacity.HasValue &&
+                System.Math.Abs(pu.BgOpacity.Value - src.DashieBgOpacity) > 0.005f)
+            {
+                src.DashieBgOpacity = pu.BgOpacity.Value;
+            }
         }
         finally { _suppressEnginePush = prev; }
 
@@ -1425,7 +1442,7 @@ public partial class MainViewModel : ObservableObject
     private SourceViewModel? FindLiveSourceById(string id)
     {
         if (_overlayContext == OverlayContext.Spotter)
-            return SpotterLayout.Sources.FirstOrDefault(s => s.Id == id);
+            return SpotterLayout.Sources.FirstOrDefault(s => IdMatchesLayer(s.Id, id));
         if (_overlayContext == OverlayContext.None || ActiveLayout == null)
             return null;
         var sess = _overlayContext switch
@@ -1435,8 +1452,22 @@ public partial class MainViewModel : ObservableObject
             OverlayContext.TestDrive => SessionType.TestDrive,
             _ => SessionType.Practice,
         };
-        return ActiveLayout.GetSessionSources(sess).FirstOrDefault(s => s.Id == id);
+        return ActiveLayout.GetSessionSources(sess).FirstOrDefault(s => IdMatchesLayer(s.Id, id));
     }
+
+    /// <summary>
+    /// Matcht eine volle Source-Id gegen die vom Layer gelieferte Id. Der Layer
+    /// trägt die Id in <c>char id[16]</c> (QuadSlot + PlaceOut) und trunkt damit
+    /// auf 15 Zeichen + NUL. Seit 0.8.6 („Default als Vorlage") sind neue Source-
+    /// Ids volle 36-Zeichen-GUIDs (Guid.NewGuid()) → exakter Vergleich schlug
+    /// fehl → OnPlaceUpdate fand die Source nicht → VR-Drag wurde nicht
+    /// gespeichert (Snap-Back beim Release). Prefix-Match löst das ohne
+    /// Bin-Struct-Change: die volle Id beginnt mit dem getrunkten Layer-String.
+    /// 15 hex-Zeichen ≈ 60 bit → Kollision zweier Source-Ids praktisch
+    /// ausgeschlossen. Leerer Layer-String matcht NICHTS (kein Grab/Hover aktiv).
+    /// </summary>
+    private static bool IdMatchesLayer(string sourceId, string layerId)
+        => !string.IsNullOrEmpty(layerId) && sourceId.StartsWith(layerId, StringComparison.Ordinal);
 
     private void OnPlaceModeChanged(bool on)
     {

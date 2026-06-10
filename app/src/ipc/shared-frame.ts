@@ -63,7 +63,7 @@ const QuadSlot = koffi.struct('QuadSlot', {
 });
 const QUAD_SLOT_SIZE: number = koffi.sizeof(QuadSlot);
 
-const MAX_QUADS = 8;
+const MAX_QUADS = 12;  // 10.6.2026: 8→12 — synchron mit C++ kMaxQuads + WPF AtlasSlotsAvailable
 const MAPPING_SIZE = FRAME_SLOT_SIZE + MAX_QUADS * QUAD_SLOT_SIZE;
 
 const CreateFileMappingW = kernel32.func(

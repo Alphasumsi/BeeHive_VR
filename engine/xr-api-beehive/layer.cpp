@@ -220,11 +220,35 @@ void main(uint2 tid : SV_DispatchThreadID)
                 // B7 (5.6.2026): Recenter-Trigger aus Electron. Atlas inkrementiert
                 // recenterEpoch pro WPF-Recenter-Keybind; bei Wechsel bauen wir
                 // m_localSpace neu mit aktueller Head-Pose als Offset auf.
-                {
-                    FrameSlot rcProbe{};
-                    if (m_mapView) std::memcpy(&rcProbe, m_mapView, sizeof(rcProbe));
-                    if (rcProbe.recenterEpoch != m_lastSeenRecenterEpoch) {
-                        m_lastSeenRecenterEpoch = rcProbe.recenterEpoch;
+                if (m_mapView) {
+                    // recenterEpoch-Probe gegen zwei Fehlerquellen abgesichert:
+                    //
+                    // (1) Seqlock-Doppel-Read: Atlas schreibt den FrameSlot per
+                    //     koffi.encode. Ein ungesynchter Einzel-memcpy kann ein
+                    //     Write-Fenster erwischen. Zwei Reads + generation/epoch-
+                    //     Vergleich → nur bei Übereinstimmung auswerten, sonst Frame
+                    //     skippen (Recenter ist nicht zeitkritisch).
+                    //
+                    // (2) Plausibilitäts-Guard gegen Wechsel ZU epoch=0 (10.6.2026):
+                    //     currentRecenterEpoch zählt im Atlas monoton ab 1 und wird
+                    //     nie wieder 0 (außer initial vor dem ersten Recenter). Im
+                    //     Log (23:54:27) trat ein KONSISTENTER epoch 21→0→21 auf —
+                    //     gleiche generation in beiden Frames, also kein Tearing das
+                    //     der Seqlock fängt, sondern ein epoch=0 das wirklich kurz im
+                    //     Slot stand. Ein Wechsel von >0 auf 0 ist IMMER ein Glitch
+                    //     (zweiter Write-Pfad / partial write / Neustart-Race) →
+                    //     ignorieren. Echtes epoch=0 gibt es nur vor dem ersten
+                    //     Recenter, da ist m_lastSeen auch 0 → kein Wechsel.
+                    FrameSlot p1{}, p2{};
+                    std::memcpy(&p1, m_mapView, sizeof(p1));
+                    std::memcpy(&p2, m_mapView, sizeof(p2));
+                    const bool spuriousZero =
+                        (p1.recenterEpoch == 0 && m_lastSeenRecenterEpoch != 0);
+                    if (p1.generation == p2.generation &&
+                        p1.recenterEpoch == p2.recenterEpoch &&
+                        p1.recenterEpoch != m_lastSeenRecenterEpoch &&
+                        !spuriousZero) {
+                        m_lastSeenRecenterEpoch = p1.recenterEpoch;
                         ApplyRecenter(frameEndInfo->displayTime);
                     }
                 }
@@ -401,7 +425,7 @@ void main(uint2 tid : SV_DispatchThreadID)
         };
         static_assert(sizeof(QuadSlot) == 80, "QuadSlot must be exactly 80 bytes");
 
-        static constexpr size_t kMaxQuads = 8;
+        static constexpr size_t kMaxQuads = 12;  // 10.6.2026: 8→12 — synchron mit JS MAX_QUADS + WPF AtlasSlotsAvailable
         static constexpr size_t kMappingSize = sizeof(FrameSlot) + kMaxQuads * sizeof(QuadSlot);
 
         // ~half a second at 90 Hz — covers iRacing's loading-screen window

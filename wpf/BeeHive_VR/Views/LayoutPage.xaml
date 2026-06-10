@@ -236,8 +236,16 @@
             <!-- ========================================================== -->
             <!-- Overlay-Cards                                              -->
             <!-- ========================================================== -->
-            <TextBlock Style="{StaticResource SectionLabel}" Text="OVERLAYS"
-                       Margin="0,0,0,8"/>
+            <DockPanel Margin="0,0,0,8" LastChildFill="False">
+                <TextBlock DockPanel.Dock="Left" Style="{StaticResource SectionLabel}" Text="OVERLAYS"/>
+                <!-- Slot-Counter: belegt / verfügbar. Überzählige Sources
+                     werden in BuildAtlasQuads stumm gedroppt. -->
+                <TextBlock DockPanel.Dock="Left" VerticalAlignment="Center"
+                           Margin="10,0,0,0" FontSize="12"
+                           Foreground="{StaticResource TextTertiary}">
+                    <Run Text="("/><Run Text="{Binding DataContext.EditSources.Count, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay}"/><Run Text=" / "/><Run Text="{Binding DataContext.AtlasSlotsAvailableDisplay, RelativeSource={RelativeSource AncestorType=Window}, Mode=OneWay}"/><Run Text=")"/>
+                </TextBlock>
+            </DockPanel>
 
             <!-- Empty-State / Onboarding: nur sichtbar wenn keine Overlays in der
                  aktuellen Session liegen. Praktisch nur beim Erst-Setup zu sehen —
