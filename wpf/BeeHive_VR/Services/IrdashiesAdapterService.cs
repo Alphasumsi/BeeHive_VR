@@ -88,6 +88,7 @@ public sealed class IrdashiesAdapterService
     private CancellationTokenSource? _mockCts;
     private Dictionary<string, JsonElement>? _mockBaseValues; // VarName → value-Array (aus telemetry.json)
     private object? _mockSessionElement;                       // SessionInfo (aus session.json)
+    private int _lastLoggedPlayerCarId = -1;                   // Throttle: Player-CarID nur bei Wechsel loggen
 
     public bool MockEnabled => _animatedRequested || _staticRequested;
 
@@ -697,7 +698,42 @@ public sealed class IrdashiesAdapterService
             var element = doc.RootElement.Clone();
             _latestSessionElement = element;
             BroadcastFireAndForget(new { type = "sessionData", data = element });
-            // sessionData tickt zu oft fürs Log (~2 Hz) — Wert nicht diagnostisch.
+
+            // Player-Car-Log: schreibt die echte iRacing-CarID + CarScreenName des
+            // Spielers, sobald sie sich ändert (sessionData tickt ~2 Hz → Throttle
+            // über _lastLoggedPlayerCarId). Nutzen: numerische CarID neuer Fahrzeuge
+            // ablesen, die im Hersteller-Logo-Mapping (carManufacturerMapping.ts)
+            // noch fehlen. Feldnamen wie in irdashies createStandings: Driver.CarID
+            // (numerisch), Driver.CarScreenName, DriverInfo.DriverCarIdx/Driver.CarIdx.
+            try
+            {
+                if (element.ValueKind == JsonValueKind.Object &&
+                    element.TryGetProperty("DriverInfo", out var di) &&
+                    di.TryGetProperty("DriverCarIdx", out var dciEl) &&
+                    dciEl.TryGetInt32(out var playerIdx) &&
+                    di.TryGetProperty("Drivers", out var drivers) &&
+                    drivers.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var d in drivers.EnumerateArray())
+                    {
+                        if (d.TryGetProperty("CarIdx", out var ci) &&
+                            ci.TryGetInt32(out var idx) && idx == playerIdx)
+                        {
+                            int carId = d.TryGetProperty("CarID", out var cid) &&
+                                        cid.TryGetInt32(out var cv) ? cv : -1;
+                            if (carId != _lastLoggedPlayerCarId)
+                            {
+                                _lastLoggedPlayerCarId = carId;
+                                string name = d.TryGetProperty("CarScreenName", out var cn)
+                                    ? cn.GetString() ?? "" : "";
+                                Logger.Info($"IrdashiesAdapter: player car — CarID={carId} \"{name}\"");
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            catch { /* Log-Best-Effort, nie die Session-Verarbeitung stören */ }
         }
         catch (Exception ex)
         {
