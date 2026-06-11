@@ -660,6 +660,12 @@ function createCapturedWindow() {
     x: 100,
     y: 100,
     show: true,
+    // Nie in der Windows-Taskleiste auftauchen (auch nicht aktiv). Als
+    // Konstruktor-Option greift es beim Erstellen, bevor Windows einen Taskbar-
+    // Button anlegt — verhindert sowohl das aktive Icon als auch den Ghost nach
+    // dem Beenden. WS_EX_TOOLWINDOW (applyCloakingAndToolWindow) kommt erst in
+    // did-finish-load und damit zu spät, um den Button noch zu entfernen.
+    skipTaskbar: true,
     // Frameless so WGC's captured client area exactly matches atlasWidth x
     // atlasHeight. With frame: true the Win32 chrome eats ~14 px off each
     // axis, WGC reports the smaller client size to the layer, and quad rects
