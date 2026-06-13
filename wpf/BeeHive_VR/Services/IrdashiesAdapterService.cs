@@ -6,6 +6,7 @@ using System.Net;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using IRSDKSharper;
@@ -694,7 +695,12 @@ public sealed class IrdashiesAdapterService
         try
         {
             var utf8 = JsonSerializer.SerializeToUtf8Bytes(info, SessionJsonOpts);
-            using var doc = JsonDocument.Parse(utf8);
+            // iRacing/IRSDKSharper liefert CarClassColor als Hex-STRING ("0xffda59"); das
+            // Frontend (wie irsdk-node) erwartet eine ZAHL — sonst fallen alle Fahrer auf die
+            // Default-Farbe (Multiclass alles eine Farbe). Vor dem Senden normalisieren.
+            var rootNode = JsonNode.Parse(utf8) as JsonObject;
+            if (rootNode != null) NormalizeCarClassColors(rootNode);
+            using var doc = JsonDocument.Parse(rootNode?.ToJsonString() ?? "{}");
             var element = doc.RootElement.Clone();
             _latestSessionElement = element;
             BroadcastFireAndForget(new { type = "sessionData", data = element });
@@ -738,6 +744,30 @@ public sealed class IrdashiesAdapterService
         catch (Exception ex)
         {
             Logger.Warn($"IrdashiesAdapter: Session-Serialisierung fehlgeschlagen: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Wandelt DriverInfo.Drivers[].CarClassColor von iRacings Hex-STRING ("0xffda59")
+    /// in eine Integer-Farbe (0xRRGGBB) um — das Frontend (getTailwindStyle) erwartet eine
+    /// Zahl wie von irsdk-node. Ohne das fallen alle Fahrer auf die Default-Farbe
+    /// (Multiclass alles eine Farbe). Bereits-Zahlen bleiben unverändert (idempotent).
+    /// </summary>
+    private static void NormalizeCarClassColors(JsonObject root)
+    {
+        if (root["DriverInfo"] is not JsonObject di) return;
+        if (di["Drivers"] is not JsonArray drivers) return;
+        foreach (var node in drivers)
+        {
+            if (node is not JsonObject driver) continue;
+            if (driver["CarClassColor"] is JsonValue cv
+                && cv.TryGetValue<string>(out var s)
+                && !string.IsNullOrEmpty(s))
+            {
+                var hex = s.StartsWith("0x") || s.StartsWith("0X") ? s.Substring(2) : s;
+                try { driver["CarClassColor"] = Convert.ToInt32(hex, 16); }
+                catch { /* unparsebar → String unverändert lassen */ }
+            }
         }
     }
 
