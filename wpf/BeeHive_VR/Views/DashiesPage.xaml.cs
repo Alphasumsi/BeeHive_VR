@@ -183,6 +183,7 @@ public partial class DashiesPage : UserControl
         FuelTabDisplay.IsChecked = true;
         BspTabDisplay.IsChecked = true;
         PlhTabDisplay.IsChecked = true;
+        CornerTabDisplay.IsChecked = true;
 
         IsVisibleChanged += DashiesPage_IsVisibleChanged;
         _ready = true;
@@ -205,6 +206,7 @@ public partial class DashiesPage : UserControl
         "Fuel Calculator" => "fuel",
         "Blind Spot Monitor" => "blindspotmonitor",
         "Pitlane Helper" => "pitlanehelper",
+        "Corner Name" => "cornername",
         _ => null,
     };
 
@@ -258,6 +260,7 @@ public partial class DashiesPage : UserControl
         bool isFuel = name == "Fuel Calculator";
         bool isBsp = name == "Blind Spot Monitor";
         bool isPlh = name == "Pitlane Helper";
+        bool isCorner = name == "Corner Name";
         InputPanel.Visibility = isInput ? Visibility.Visible : Visibility.Collapsed;
         RelativePanel.Visibility = isRel ? Visibility.Visible : Visibility.Collapsed;
         TrackMapPanel.Visibility = isMap ? Visibility.Visible : Visibility.Collapsed;
@@ -265,7 +268,8 @@ public partial class DashiesPage : UserControl
         FuelPanel.Visibility = isFuel ? Visibility.Visible : Visibility.Collapsed;
         BlindSpotPanel.Visibility = isBsp ? Visibility.Visible : Visibility.Collapsed;
         PitlaneHelperPanel.Visibility = isPlh ? Visibility.Visible : Visibility.Collapsed;
-        GenericPanel.Visibility = (isInput || isRel || isMap || isStd || isFuel || isBsp || isPlh) ? Visibility.Collapsed : Visibility.Visible;
+        CornerPanel.Visibility = isCorner ? Visibility.Visible : Visibility.Collapsed;
+        GenericPanel.Visibility = (isInput || isRel || isMap || isStd || isFuel || isBsp || isPlh || isCorner) ? Visibility.Collapsed : Visibility.Visible;
 
         if (isInput)
         {
@@ -309,6 +313,12 @@ public partial class DashiesPage : UserControl
             _activeSizeW = PlhSizeWidth; _activeSizeH = PlhSizeHeight;
             LoadConfig("pitlanehelper");
         }
+        else if (isCorner)
+        {
+            _activeWidget = "cornername"; _activeRoot = CornerPanel;
+            _activeSizeW = CornerSizeWidth; _activeSizeH = CornerSizeHeight;
+            LoadConfig("cornername");
+        }
         else
         {
             _activeWidget = null; _activeRoot = null;
@@ -329,8 +339,9 @@ public partial class DashiesPage : UserControl
             // Format (irdashies-Template-Bridge-Feld config.honeySize) → Felder.
             if (_activeSizeW != null && _activeSizeH != null)
             {
-                _activeSizeW.Text = ((int)(AsDouble(GetByPath(cfg, "honeySize.width")) ?? 420)).ToString();
-                _activeSizeH.Text = ((int)(AsDouble(GetByPath(cfg, "honeySize.height")) ?? 240)).ToString();
+                var (defW, defH) = DefaultSize();
+                _activeSizeW.Text = ((int)(AsDouble(GetByPath(cfg, "honeySize.width")) ?? defW)).ToString();
+                _activeSizeH.Text = ((int)(AsDouble(GetByPath(cfg, "honeySize.height")) ?? defH)).ToString();
             }
 
             // Alle getaggten Controls im aktiven Panel (über alle Tabs) füllen.
@@ -353,6 +364,10 @@ public partial class DashiesPage : UserControl
                     case Slider sl:
                         var d = AsDouble(node);
                         if (d.HasValue) sl.Value = d.Value;
+                        break;
+                    case TextBox tb:
+                        var n = AsDouble(node);
+                        if (n.HasValue) tb.Text = ((int)n.Value).ToString(CultureInfo.InvariantCulture);
                         break;
                 }
             }
@@ -715,6 +730,13 @@ public partial class DashiesPage : UserControl
         BspOptionsTab.Visibility = BspTabOptions.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
     }
 
+    private void CornerTab_Checked(object sender, RoutedEventArgs e)
+    {
+        if (CornerDisplayTab == null) return; // während InitializeComponent
+        CornerDisplayTab.Visibility = CornerTabDisplay.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        CornerAppearanceTab.Visibility = CornerTabAppearance.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     private void PlhTab_Checked(object sender, RoutedEventArgs e)
     {
         if (PlhDisplayTab == null) return; // während InitializeComponent
@@ -784,6 +806,7 @@ public partial class DashiesPage : UserControl
         "fuel" => (300, 220),
         "blindspotmonitor" => (800, 500),
         "pitlanehelper" => (150, 200),
+        "cornername" => (350, 80),
         _ => (420, 240),
     };
 
@@ -818,6 +841,27 @@ public partial class DashiesPage : UserControl
     private void SizeField_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key == Key.Enter) CommitFormat();
+    }
+
+    private void NumberField_LostFocus(object sender, RoutedEventArgs e) => CommitNumberField(sender);
+
+    private void NumberField_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter) CommitNumberField(sender);
+    }
+
+    /// <summary>Getaggtes Number-TextBox (aktuell nur Corner-Font-Size) → Config-Int, 12–32 geklammert.</summary>
+    private void CommitNumberField(object sender)
+    {
+        if (sender is not TextBox tb || tb.Tag is not string path) return;
+        if (!int.TryParse(tb.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v))
+        {
+            if (_activeWidget != null) LoadConfig(_activeWidget); // ungültig → aus Config zurückladen
+            return;
+        }
+        v = Math.Clamp(v, 12, 32);
+        tb.Text = v.ToString(CultureInfo.InvariantCulture);
+        PatchActive(cfg => SetByPath(cfg, path, JsonValue.Create(v)));
     }
 
     private void CommitFormat()

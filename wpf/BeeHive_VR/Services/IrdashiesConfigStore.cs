@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -138,6 +139,49 @@ public sealed class IrdashiesConfigStore
         return _root?["dashboards"]?[profile] as JsonObject;
     }
 
+    /// <summary>
+    /// Ergänzt Widgets, die in der eingebetteten Baseline (dashies-dist/dashboard.json)
+    /// existieren, aber in der geladenen User-Config fehlen — z.B. neu importierte Dashies
+    /// wie 'cornername'. So tauchen neue Widgets bei bestehenden Configs im Dashies-Tab /
+    /// in der Preview auf, ohne das gespeicherte Layout zu verändern. Speichert nur, wenn
+    /// tatsächlich etwas ergänzt wurde.
+    /// </summary>
+    private void MergeMissingWidgets()
+    {
+        try
+        {
+            if (!TryLoadFile(FallbackDashboardPath, out var baseline) || baseline == null) return;
+            if (baseline["widgets"] is not JsonArray baseWidgets) return;
+
+            var dash = ActiveDashboardNode();
+            if (dash == null) return;
+            if (dash["widgets"] is not JsonArray widgets)
+            {
+                widgets = new JsonArray();
+                dash["widgets"] = widgets;
+            }
+
+            var have = new HashSet<string>();
+            foreach (var w in widgets)
+                if (w?["id"]?.GetValue<string>() is string id) have.Add(id);
+
+            bool added = false;
+            foreach (var bw in baseWidgets)
+            {
+                if (bw?["id"]?.GetValue<string>() is not string bid || have.Contains(bid)) continue;
+                widgets.Add(JsonNode.Parse(bw.ToJsonString())); // Deep-Copy, losgelöst von der Baseline
+                added = true;
+                Logger.Info($"IrdashiesConfigStore: Widget '{bid}' aus Baseline ergänzt.");
+            }
+
+            if (added) Save();
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"IrdashiesConfigStore: MergeMissingWidgets fehlgeschlagen: {ex.Message}");
+        }
+    }
+
     private void EnsureLoaded()
     {
         if (_root != null) return;
@@ -146,6 +190,7 @@ public sealed class IrdashiesConfigStore
         if (TryLoadFile(LocalConfigPath, out var root))
         {
             _root = root;
+            MergeMissingWidgets();   // neue Widgets (z.B. cornername) aus Baseline nachziehen
             return;
         }
 
@@ -155,6 +200,7 @@ public sealed class IrdashiesConfigStore
         {
             _root = legacy;
             Logger.Info($"IrdashiesConfigStore: migrated {LegacyLocalConfigPath} → {LocalConfigPath}");
+            MergeMissingWidgets();
             Save();
             try { File.Delete(LegacyLocalConfigPath); } catch { /* nicht kritisch */ }
             return;
@@ -165,6 +211,7 @@ public sealed class IrdashiesConfigStore
         {
             _root = migrated;
             Logger.Info($"IrdashiesConfigStore: aus {IrdashiesConfigPath} migriert.");
+            MergeMissingWidgets();
             Save();
             return;
         }

@@ -147,6 +147,7 @@
                              Foreground="{StaticResource TextPrimary}"
                              SelectionChanged="OverlayList_SelectionChanged">
                         <ListBoxItem Content="Blind Spot Monitor"/>
+                        <ListBoxItem Content="Corner Name"/>
                         <ListBoxItem Content="Fuel Calculator"/>
                         <ListBoxItem Content="Input"/>
                         <ListBoxItem Content="Pitlane Helper"/>
@@ -1632,6 +1633,66 @@
                                         <DockPanel Grid.Column="1">
                                             <TextBlock DockPanel.Dock="Right" Width="38" Margin="8,0,0,0" TextAlignment="Right" VerticalAlignment="Center" FontSize="12" Foreground="{StaticResource TextTertiary}" Text="{Binding ElementName=BspDistBehind, Path=Value, Converter={StaticResource SliderUnit}, ConverterParameter=m}"/>
                                             <Slider x:Name="BspDistBehind" Minimum="3" Maximum="6" Value="5" IsSnapToTickEnabled="True" TickFrequency="1" VerticalAlignment="Center" Tag="distBehind" ValueChanged="Slider_Changed"/></DockPanel></Grid>
+                                </StackPanel>
+                            </Grid>
+                        </ScrollViewer>
+                    </DockPanel>
+
+                    <!-- ===== Corner Name Settings ===== -->
+                    <DockPanel x:Name="CornerPanel" Visibility="Collapsed" Margin="16,14">
+                        <StackPanel DockPanel.Dock="Top">
+                            <TextBlock Text="Corner Names" FontSize="18" FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextPrimary}"/>
+                            <TextBlock Text="Shows the current track section name, corner number and progress through the section. Track data sourced from lovely-track-data."
+                                       Style="{StaticResource RowHint}" Margin="0,2,0,10"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                                <RadioButton x:Name="CornerTabDisplay" GroupName="CornerTabs" Content="Display" Style="{StaticResource TabRadio}" Checked="CornerTab_Checked"/>
+                                <RadioButton x:Name="CornerTabAppearance" GroupName="CornerTabs" Content="Appearance" Style="{StaticResource TabRadio}" Checked="CornerTab_Checked"/>
+                            </StackPanel>
+                            <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,0,0,10"/>
+                        </StackPanel>
+
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,8,0">
+                            <Grid>
+                                <!-- ===== DISPLAY TAB ===== -->
+                                <StackPanel x:Name="CornerDisplayTab">
+                                    <TextBlock Text="Elements" Style="{StaticResource SectionHeader}" Margin="0,4,0,6"/>
+                                    <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Show Corner Number" Style="{StaticResource RowLabel}"/>
+                                        <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center" Tag="showCornerNumber" Click="Toggle_Changed"/></Grid>
+                                    <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Show Progress Bar" Style="{StaticResource RowLabel}"/>
+                                        <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center" Tag="showProgressBar" Click="Toggle_Changed"/></Grid>
+                                    <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Show Track Percentage" Style="{StaticResource RowLabel}"/>
+                                        <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center" Tag="showTrackPct" Click="Toggle_Changed"/></Grid>
+
+                                    <Border Height="1" Background="{StaticResource BorderTertiary}" Margin="0,16"/>
+
+                                    <TextBlock Text="Format (px)" Style="{StaticResource SectionHeader}" Margin="0,0,0,6"/>
+                                    <TextBlock Text="Width × height — sets the VR quad aspect. Resize the Preview window, then Add to layout copies the size here."
+                                               Style="{StaticResource RowHint}" Margin="0,0,0,8"/>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                        <TextBox x:Name="CornerSizeWidth" Width="80" Text="350" HorizontalContentAlignment="Center" LostFocus="SizeField_LostFocus" KeyDown="SizeField_KeyDown"/>
+                                        <TextBlock Text="&#xD7;" VerticalAlignment="Center" Margin="10,0" Foreground="{StaticResource TextSecondary}"/>
+                                        <TextBox x:Name="CornerSizeHeight" Width="80" Text="80" HorizontalContentAlignment="Center" LostFocus="SizeField_LostFocus" KeyDown="SizeField_KeyDown"/>
+                                        <TextBlock Text="px" VerticalAlignment="Center" Margin="8,0,0,0" Foreground="{StaticResource TextTertiary}"/>
+                                        <Button Content="Use preview size" Margin="16,0,0,0" Padding="14,6" VerticalAlignment="Center" Cursor="Hand" Click="UsePreviewSize_Click"/>
+                                    </StackPanel>
+                                    <Button Content="Reset to default" Margin="0,10,0,0" Padding="14,6" HorizontalAlignment="Left" Cursor="Hand" Click="ResetFormat_Click"/>
+                                </StackPanel>
+
+                                <!-- ===== APPEARANCE TAB ===== -->
+                                <StackPanel x:Name="CornerAppearanceTab" Visibility="Collapsed">
+                                    <TextBlock Text="Appearance" Style="{StaticResource SectionHeader}" Margin="0,4,0,6"/>
+                                    <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="180"/></Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Font Size" Style="{StaticResource RowLabel}"/>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                                            <TextBox x:Name="CornerFontSize" Width="60" Text="18" HorizontalContentAlignment="Center" Tag="fontSize" LostFocus="NumberField_LostFocus" KeyDown="NumberField_KeyDown"/>
+                                            <TextBlock Text="px" VerticalAlignment="Center" Margin="8,0,0,0" Foreground="{StaticResource TextTertiary}"/>
+                                        </StackPanel></Grid>
+                                    <TextBlock Text="Base font size for corner names (12–32 px)."
+                                               Style="{StaticResource RowHint}" Margin="0,2,0,0"/>
                                 </StackPanel>
                             </Grid>
                         </ScrollViewer>

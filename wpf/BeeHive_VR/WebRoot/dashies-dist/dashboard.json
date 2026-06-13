@@ -1276,6 +1276,30 @@
           "offlineTesting": true
         }
       }
+    },
+    {
+      "id": "cornername",
+      "enabled": false,
+      "layout": {
+        "x": 0,
+        "y": 0,
+        "width": 350,
+        "height": 80
+      },
+      "config": {
+        "showCornerNumber": true,
+        "showProgressBar": true,
+        "showTrackPct": true,
+        "fontSize": 18,
+        "opacity": 0.9,
+        "sessionVisibility": {
+          "race": true,
+          "loneQualify": true,
+          "openQualify": true,
+          "practice": true,
+          "offlineTesting": true
+        }
+      }
     }
   ],
   "generalSettings": {
