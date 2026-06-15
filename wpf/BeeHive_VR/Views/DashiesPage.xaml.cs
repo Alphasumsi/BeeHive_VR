@@ -88,6 +88,7 @@ public partial class DashiesPage : UserControl
     {
         ("Position", "position"), ("Car Number", "carNumber"), ("Country Flags", "countryFlags"),
         ("Driver Name", "driverName"), ("Team Name", "teamName"), ("Pit Status", "pitStatus"),
+        ("Pit Times", "pitTimes"),
         ("Car Manufacturer", "carManufacturer"), ("Driver Tag", "driverTag"), ("Driver Badge", "badge"),
         ("iRating Change", "iratingChange"), ("Position Change", "positionChange"),
         ("Gap", "gap"), ("Interval", "interval"), ("Best Time", "fastestTime"),

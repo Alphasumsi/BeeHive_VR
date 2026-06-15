@@ -65,6 +65,15 @@
           "showPitTime": true,
           "pitLapDisplayMode": "lastPitLap"
         },
+        "pitTimes": {
+          "enabled": true,
+          "showPitLaneTime": true,
+          "showPitStallTime": true,
+          "showLastPitLap": true,
+          "lapDisplayMode": "lapsSinceLastPit",
+          "maxDuration": 300,
+          "decimalPlaces": 1
+        },
         "position": {
           "enabled": true
         },
@@ -230,6 +239,7 @@
           "driverTag",
           "teamName",
           "pitStatus",
+          "pitTimes",
           "carManufacturer",
           "badge",
           "iratingChange",

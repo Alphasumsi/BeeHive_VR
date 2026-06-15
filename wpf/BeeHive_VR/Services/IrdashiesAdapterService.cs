@@ -427,6 +427,15 @@ public sealed class IrdashiesAdapterService
             return result;
         }
 
+        // --- Standings-Preview: zyklt Player (+ Nachbar) durch einen kompletten
+        //     Boxenstopp, damit die „Pit Times"-Spalte (PL/B/L) ohne iRacing live
+        //     hochzählt, einfriert und der Box-Stall getrennt sichtbar wird. ---
+        if (_previewWidgetId == "standings")
+        {
+            BuildStandingsPreviewMock(result, t);
+            return result;
+        }
+
         double throttle = System.Math.Sin(t * 2.0) * 0.5 + 0.5;          // 0..1
         double brake = System.Math.Max(0, System.Math.Sin(t * 2.0 + System.Math.PI)) * 0.9; // 0..0.9
         double clutchRaw = 1.0 - System.Math.Max(0, System.Math.Sin(t * 0.7)) * 0.8;        // 1=gelöst
@@ -649,6 +658,58 @@ public sealed class IrdashiesAdapterService
         result["Brake"]       = V(new[] { 0.0f });
         result["BrakeRaw"]    = V(new[] { 0.0f });
         result["Gear"]        = V(new[] { 1 });
+    }
+
+    /// <summary>Widget-spezifischer Mock-Pfad für das Standings-Overlay. Treibt den
+    /// Player (idx 4, immer sichtbar) und einen Nachbarn (idx 5, phasenversetzt)
+    /// durch einen wiederholenden Boxenstopp-Zyklus, damit die neue „Pit Times"-
+    /// Spalte (PL = Pit-Road-Zeit, B = Box-Stall-Standzeit, L = letzte Box-Runde)
+    /// live hochzählt und nach Verlassen einfriert. Setzt SessionState=Racing, da
+    /// der PitLapStore-Updater sonst keine Pit-Zeiten trackt. Surface-Konvention:
+    /// 3=on track, 2=pit road, 1=pit stall, -1=not in world.</summary>
+    private void BuildStandingsPreviewMock(Dictionary<string, object> result, double t)
+    {
+        static object V(object arr) => new Dictionary<string, object> { ["value"] = arr };
+
+        const double cycle = 44.0;  // 8s track, 4s pit-in, 24s stall, 4s pit-out, 4s exit
+        const int baseLap = 10;
+        const double lapTime = 10.0; // Runde alle 10s → „Runden her" wächst über den Stint
+
+        var onPit = new bool[64];
+        var surface = new int[64];
+        var laps = new int[64];
+        for (int i = 0; i < 64; i++)
+        {
+            surface[i] = 3;
+            onPit[i] = false;
+            laps[i] = baseLap;
+        }
+
+        // Lokale Timeline eines Autos: setzt Surface + OnPitRoad und eine über die
+        // Zeit wachsende Rundenzahl (für die L-Anzeige und frische Pit-Einfahrten).
+        void Drive(int idx, double localT)
+        {
+            double tt = ((localT % cycle) + cycle) % cycle;
+            laps[idx] = baseLap + (int)System.Math.Floor(localT / lapTime);
+
+            if (tt < 8.0)        { surface[idx] = 3; onPit[idx] = false; } // on track
+            else if (tt < 12.0)  { surface[idx] = 2; onPit[idx] = true;  } // pit road in  → PL startet
+            else if (tt < 36.0)  { surface[idx] = 1; onPit[idx] = true;  } // pit stall    → B startet
+            else if (tt < 40.0)  { surface[idx] = 2; onPit[idx] = true;  } // pit road out → B friert
+            else                 { surface[idx] = 3; onPit[idx] = false; } // exited       → PL friert
+        }
+
+        Drive(4, t);          // Player — voller Zyklus, immer sichtbar
+        Drive(5, t + 22.0);   // Nachbar — halber Versatz, zweite animierte Zeile
+
+        result["CarIdxOnPitRoad"]    = V(onPit);
+        result["CarIdxTrackSurface"] = V(surface);
+        result["CarIdxLap"]          = V(laps);
+        result["OnPitRoad"]          = V(new[] { onPit[4] });
+        result["PlayerTrackSurface"] = V(new[] { surface[4] });
+        result["SessionState"]       = V(new[] { 4 });   // Racing — Pflicht fürs Pit-Tracking
+        result["SessionUniqueID"]    = V(new[] { 1 });
+        result["SessionTime"]        = V(new[] { t });
     }
 
     private void OnSdkTelemetry()
