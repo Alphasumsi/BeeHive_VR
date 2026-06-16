@@ -435,9 +435,11 @@ void main(uint2 tid : SV_DispatchThreadID)
         // F5 (6.6.2026): nach N Frames ohne FrameSlot.generation-Bump gilt
         // der Publisher (Atlas-Prozess) als tot/hängt → keine Quads mehr
         // composen, damit eingefrorene Overlays nicht im VR-Bild stehen
-        // bleiben. Atlas heartbeat-bumpt alle 250 ms; 60 Frames bei 90 Hz
-        // ≈ 0.7 s, bei 60 Hz ≈ 1.0 s. Komfortable Marge gegen Jitter.
-        static constexpr uint64_t kWatchdogStaleFrames = 60;
+        // bleiben. Atlas heartbeat-bumpt alle 100 ms; 120 Frames bei 90 Hz
+        // ≈ 1.3 s, bei 60 Hz ≈ 2.0 s. Härter gegen Background-Throttling
+        // wenn WPF minimiert + Atlas DWM-cloaked = ganzer Prozess als
+        // Background klassifiziert (16.6.2026, User-Beobachtung).
+        static constexpr uint64_t kWatchdogStaleFrames = 120;
 
         // Phase 3 (5.6.2026): Sticker/Pille erscheinen erst nach 150 ms
         // stabilem Hover. Sofortiges Verschwinden bei Aim-weg (delay-in,

@@ -90,6 +90,16 @@ function applyCloakingAndToolWindow(hwnd: bigint): void {
 
 if (started) app.quit();
 
+// 16.6.2026: Chromium-CLI-Switches gegen Windows-Background-Throttling. Atlas
+// ist DWM-cloaked, hat also keine sichtbare Window-Präsenz. Wenn WPF parallel
+// minimiert/im-Tray ist (typischer Workflow), klassifiziert Windows den
+// gesamten BeeHive_VR_Atlas-Prozess als Background → setInterval-Timer
+// gestreckt, F5-Heartbeat zu selten → Watchdog trippt grundlos. Diese
+// Switches halten den Main-Process-Timer und Renderer auf Vordergrund-Niveau.
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+
 // Two layers of single-instance enforcement:
 // 1. Electron's app-level lock (handles the "user double-clicked the shortcut" case)
 // 2. Win32 named mutex shared with future native companion (cross-component)
@@ -943,13 +953,15 @@ app.whenReady().then(() => {
   // F5 (6.6.2026): Heartbeat-Republish. republish() bumpt FrameSlot.generation
   // pro Aufruf — der Layer benutzt das als Liveness-Signal (siehe Watchdog
   // in layer.cpp). Ohne Heartbeat würde Atlas im Idle aussehen wie Atlas-tot,
-  // weil regulärer republish() nur bei State-Change feuert. 250 ms ist
-  // großzügig genug damit Layer-Threshold (≈60 Frames bei 90 Hz ≈ 0.7 s)
-  // mit Sicherheits-Marge greift, klein genug damit Quads bei Atlas-Crash
-  // innerhalb von ~1 s verschwinden.
+  // weil regulärer republish() nur bei State-Change feuert. 100 ms (war 250)
+  // ist robuster gegen Background-Throttling wenn WPF minimiert + Atlas
+  // DWM-cloaked = Prozess als Background klassifiziert (Win Timer-Resolution
+  // wird coarser, setInterval kann auf >1 s stretchen). Layer-Threshold
+  // ist 120 Frames (≈1.3 s) — kleinerer Heartbeat-Tick reduziert Trip-Risiko
+  // bei kurzen OS-Stalls deutlich (16.6.2026, User-Beobachtung).
   setInterval(() => {
     if (currentHwnd !== 0n) republish();
-  }, 250);
+  }, 100);
 
   // Place-in-VR: layer publishes pose updates while a controller-grab is
   // active; we forward each generation to WPF over the existing pipe. The
