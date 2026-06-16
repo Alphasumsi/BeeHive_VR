@@ -130,7 +130,16 @@ class WpfLink extends EventEmitter {
     }
   }
 
-  private dispatch(msg: { type?: string; quads?: AtlasQuadFromWpf[]; on?: boolean; id?: string; value?: boolean }): void {
+  private dispatch(msg: {
+    type?: string;
+    quads?: AtlasQuadFromWpf[];
+    on?: boolean;
+    id?: string;
+    value?: boolean;
+    left?: number; top?: number; width?: number; height?: number;
+    monitorIndex?: number;
+    minimized?: boolean;
+  }): void {
     if (!msg.type) return;
     switch (msg.type) {
       case 'setAtlasLayout':
@@ -154,6 +163,22 @@ class WpfLink extends EventEmitter {
         // auf leere Quads — Layout-State bleibt erhalten, kommt bei Re-On
         // sofort zurück. Default true bei Reconnect.
         this.emit('masterVisible', !!msg.value);
+        break;
+      case 'wpfWindowBounds':
+        // 7.6.2026: WPF-Self-Capture Display-Crop. WPF schickt Outer-Bounds
+        // (DPI-aware physical px) + minimized-State. main.ts entscheidet pro
+        // Source ob die WPF (Title=AppEdition.ProductName) auf Screen-Capture
+        // umgestellt + via CSS-Crop maskiert wird (damit ContextMenus &
+        // ComboBox-Dropdowns im VR sichtbar werden — die rendern als
+        // separate Popup-HWNDs und fehlen im Window-Capture-Mode).
+        this.emit('wpfWindowBounds', {
+          left:   typeof msg.left   === 'number' ? msg.left   : 0,
+          top:    typeof msg.top    === 'number' ? msg.top    : 0,
+          width:  typeof msg.width  === 'number' ? msg.width  : 0,
+          height: typeof msg.height === 'number' ? msg.height : 0,
+          monitorIndex: typeof msg.monitorIndex === 'number' ? msg.monitorIndex : 0,
+          minimized: !!msg.minimized,
+        });
         break;
       default:
         // Unknown message types are fine — just ignored. Old WPF still sends

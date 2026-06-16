@@ -15,7 +15,7 @@
 // unchanged so we can roll back without recompiling the layer. Renamed in
 // step 3 after the visual proof.
 
-import { app, BrowserWindow, desktopCapturer } from 'electron';
+import { app, BrowserWindow, desktopCapturer, screen as electronScreen } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import started from 'electron-squirrel-startup';
@@ -170,6 +170,24 @@ function applyEffectiveVisibility(): void {
   }
 }
 
+// 7.6.2026: WPF-Self-Source Iconic-Sync — wenn WPF minimiert ist, wird die
+// WPF-Self-Source (target=WPF_SELF_TITLE) als iconic markiert, sonst freigegeben.
+// Wirkt parallel zum normalen desktopCapturer-Absenz-Mechanismus für andere
+// Window-Sources.
+function applyWpfSelfIconic(): void {
+  let changed = false;
+  const minimized = wpfBounds?.minimized ?? false;
+  for (const slot of currentLayout) {
+    if (slotTypeById.get(slot.id) !== 'window') continue;
+    if (slotTargetById.get(slot.id) !== WPF_SELF_TITLE) continue;
+    if (iconicById.get(slot.id) !== minimized) {
+      iconicById.set(slot.id, minimized);
+      changed = true;
+    }
+  }
+  if (changed) { applyEffectiveVisibility(); republish(); }
+}
+
 // C6: Title → desktopCapturer-sourceId Cache. WPF schickt den Fenstertitel als
 // `target`; Electron muss daraus die opake sourceId resolven die getUserMedia
 // braucht. Periodischer Refresh (3 s) hält den Cache aktuell — Fenster die
@@ -179,20 +197,52 @@ function applyEffectiveVisibility(): void {
 const windowSourceIdByTitle = new Map<string, string>();
 let windowRefreshTimer: NodeJS.Timeout | null = null;
 
+// 7.6.2026 — WPF-Self-Capture via Display-Mode + CSS-Crop. ContextMenus &
+// ComboBox-Dropdowns rendern in WPF als separate Popup-HWNDs und fehlen im
+// Window-Capture-Mode (Chromium's window-source erfasst nur das Target-HWND).
+// Workaround: für die WPF-Self-Source (target = WPF_SELF_TITLE) schalten wir
+// auf Screen-Capture des betroffenen Monitors um und cropen das Video per
+// CSS-overflow:hidden + negative position auf den Window-Rect.
+const WPF_SELF_TITLE = 'BeeHive VR';   // = AppEdition.ProductName
+// Cache: Display-ID (electron.screen) → sourceId (desktopCapturer). Wird im
+// selben 3-s-Tick mit refreshWindowSources mit-aktualisiert. Display-ID ist
+// stabil über den App-Lebenszyklus, sourceId kann sich beim Monitor-
+// Reconnect ändern.
+const screenSourceIdByDisplayId = new Map<number, string>();
+// State von WPF gepusht (left/top/width/height in physical px, minimized).
+// null → Display-Crop deaktiviert (WPF noch nicht verbunden), syncIframes
+// fällt zurück auf normalen Window-Capture-Pfad.
+interface WpfBounds {
+  left: number; top: number; width: number; height: number;
+  minimized: boolean;
+}
+let wpfBounds: WpfBounds | null = null;
+
 async function refreshWindowSources(): Promise<void> {
   try {
+    // Beide Types in einem Aufruf — Chromium liefert window UND screen Sources
+    // im selben Result-Array, jeder mit display_id (für screen) bzw. window-
+    // HWND-Prefix (für window).
     const sources = await desktopCapturer.getSources({
-      types: ['window'],
+      types: ['window', 'screen'],
       thumbnailSize: { width: 0, height: 0 }, // Thumbnails brauchen wir nicht
       fetchWindowIcons: false,
     });
     const prevKeys = new Set(windowSourceIdByTitle.keys());
     let changed = false;
     windowSourceIdByTitle.clear();
+    screenSourceIdByDisplayId.clear();
     for (const s of sources) {
-      windowSourceIdByTitle.set(s.name, s.id);
-      if (!prevKeys.has(s.name)) changed = true;
-      prevKeys.delete(s.name);
+      // Window-Sources: id-Prefix "window:HWND:Z". Screen-Sources: id-Prefix
+      // "screen:DISPLAY_ID:0". display_id ist auf screen-Sources non-leer.
+      if (s.display_id) {
+        const displayId = Number(s.display_id);
+        if (Number.isFinite(displayId)) screenSourceIdByDisplayId.set(displayId, s.id);
+      } else {
+        windowSourceIdByTitle.set(s.name, s.id);
+        if (!prevKeys.has(s.name)) changed = true;
+        prevKeys.delete(s.name);
+      }
     }
     if (prevKeys.size > 0) changed = true; // Fenster verschwunden
     // C6 (5.6.2026): Iconic-Erkennung via ABSENZ aus desktopCapturer-Liste.
@@ -250,6 +300,53 @@ let lastSyncedDomKey = '';
 // (Id-Set ∪ Wunsch-Größen) ändert; reine Pose-Updates (=Place-in-VR-Drag)
 // dürfen die rectX/Y/W/H NICHT anfassen, sonst stretcht der Atlas pro Frame.
 const currentRectWishById = new Map<string, { w: number; h: number }>();
+
+// 7.6.2026 — WPF-Self-Source Display-Lookup. Sucht aus electron.screen den
+// Display dessen physische Bounds den WPF-Window-Rect enthalten. Liefert
+// Screen-SourceId + Crop-Parameter zurück (Monitor-Größe in physical px =
+// MediaStream-Auflösung; Crop-Offset = WPF-Position relativ zum Monitor).
+// null → kein Display gefunden (z.B. WPF noch nicht-verbunden, oder
+// Monitor-Disconnect).
+interface WpfCrop {
+  sourceId: string;
+  monitorW: number;   // physical px = MediaStream width
+  monitorH: number;   // physical px = MediaStream height
+  cropX: number;      // physical px relative to monitor topleft
+  cropY: number;
+  cropW: number;      // physical px = panel-size = wpfBounds.width
+  cropH: number;
+}
+function resolveWpfCrop(): WpfCrop | null {
+  if (!wpfBounds || wpfBounds.minimized) return null;
+  if (wpfBounds.width <= 0 || wpfBounds.height <= 0) return null;
+  const displays = electronScreen.getAllDisplays();
+  for (const d of displays) {
+    // electron.screen liefert bounds + scaleFactor in DIPs. WPF schickt
+    // physical px (GetWindowRect ist DPI-aware). Konvertieren wir hier.
+    const sf = d.scaleFactor || 1;
+    const physLeft = Math.round(d.bounds.x * sf);
+    const physTop  = Math.round(d.bounds.y * sf);
+    const physW    = Math.round(d.bounds.width  * sf);
+    const physH    = Math.round(d.bounds.height * sf);
+    // TopLeft des WPF-Fensters muss in diesem Monitor liegen — Multi-Monitor-
+    // Spanning ist sehr selten; Dominanz-Monitor reicht.
+    if (wpfBounds.left >= physLeft && wpfBounds.left < physLeft + physW
+        && wpfBounds.top >= physTop && wpfBounds.top < physTop + physH) {
+      const sourceId = screenSourceIdByDisplayId.get(d.id);
+      if (!sourceId) return null;
+      return {
+        sourceId,
+        monitorW: physW,
+        monitorH: physH,
+        cropX: wpfBounds.left - physLeft,
+        cropY: wpfBounds.top - physTop,
+        cropW: wpfBounds.width,
+        cropH: wpfBounds.height,
+      };
+    }
+  }
+  return null;
+}
 
 // Phase 1 (5.6.2026): Place-in-VR-Wächter. Default false → Layer ignoriert
 // Controller-Trigger; WPF-Toggle setzt auf true. Wird in jeden FrameSlot
@@ -455,6 +552,10 @@ function syncIframes(): void {
     title: string;        // nur relevant für kind=window (Diagnose-Label)
     name: string;
     isActive: boolean;
+    // 7.6.2026 — WPF-Self-Source Display-Crop. Wenn gesetzt: <video> wird
+    // mit Monitor-Auflösung gerendert und per overflow:hidden auf das WPF-
+    // Window-Rect maskiert. Sonst (für normale Window-Sources) leeres Objekt.
+    crop: { monW: number; monH: number; x: number; y: number } | null;
   }
   const specs: IframeSpec[] = [];
   for (const slot of currentLayout) {
@@ -466,7 +567,20 @@ function syncIframes(): void {
     const target = slotTargetById.get(slot.id) ?? '';
     const name = slotNameById.get(slot.id) ?? '';
     if (type === 'window') {
-      const sourceId = windowSourceIdByTitle.get(target) ?? '';
+      // 7.6.2026: WPF-Self-Source erkennen → Display-Capture + Crop statt
+      // Window-Capture. ContextMenus & ComboBox-Dropdowns sind separate
+      // Popup-HWNDs in WPF und fehlen im Window-Capture-Mode.
+      let sourceId = windowSourceIdByTitle.get(target) ?? '';
+      let crop: IframeSpec['crop'] = null;
+      if (target === WPF_SELF_TITLE) {
+        const c = resolveWpfCrop();
+        if (c) {
+          sourceId = c.sourceId;
+          crop = { monW: c.monitorW, monH: c.monitorH, x: c.cropX, y: c.cropY };
+        }
+        // Falls resolveWpfCrop null liefert (WPF-Bounds noch nicht gepusht,
+        // Display-Cache leer) → Fallback auf Window-Capture-Pfad (kein Crop).
+      }
       specs.push({
         domId: sourceIdToDomId(slot.id),
         rectX: slot.rectX, rectY: slot.rectY, rectW: slot.rectW, rectH: slot.rectH,
@@ -476,6 +590,7 @@ function syncIframes(): void {
         title: target,
         name,
         isActive: slot.id === currentHoveredId,
+        crop,
       });
     } else {
       specs.push({
@@ -487,6 +602,7 @@ function syncIframes(): void {
         title: '',
         name,
         isActive: slot.id === currentHoveredId,
+        crop: null,
       });
     }
   }
@@ -495,7 +611,10 @@ function syncIframes(): void {
   // Kind/sourceId-Wechsel (Window-Capture wurde gefunden o. verloren);
   // bleibt stabil wenn nur Pose im Layer mutiert.
   const key = specs
-    .map(s => `${s.domId}@${s.rectX},${s.rectY},${s.rectW},${s.rectH}=${s.kind}:${s.url}/${s.sourceId}|${s.name}|${s.isActive ? 'A' : '-'}`)
+    .map(s => {
+      const c = s.crop ? `${s.crop.monW}x${s.crop.monH}+${s.crop.x},${s.crop.y}` : '-';
+      return `${s.domId}@${s.rectX},${s.rectY},${s.rectW},${s.rectH}=${s.kind}:${s.url}/${s.sourceId}|${s.name}|${s.isActive ? 'A' : '-'}|c=${c}`;
+    })
     .sort()
     .join('||');
   if (key === lastSyncedDomKey) return;
@@ -566,6 +685,10 @@ function syncIframes(): void {
         // window-Capture: <video> mit MediaStream aus desktopCapturer.
         // Solange sourceId leer ist (Title noch nicht resolved) bleibt das
         // video schwarz; nächste Refresh-Runde triggert syncIframes erneut.
+        // 7.6.2026: bei s.crop != null (WPF-Self-Source) wechseln wir in
+        // Display-Capture-Mode + CSS-Crop — <video> wird auf Monitor-Größe
+        // gerendert und durch overflow:hidden am .panel auf den WPF-Rect
+        // maskiert. Erfasst dadurch ContextMenus / ComboBox-Dropdowns.
         var video = currentChild;
         if (!video) {
           video = document.createElement('video');
@@ -574,6 +697,22 @@ function syncIframes(): void {
           video.playsInline = true;
           video.setAttribute('disablepictureinpicture', '');
           panel.insertBefore(video, panel.firstChild);
+        }
+        // Crop-Mode: Panel cropt das übergroße Video. Sonst Standard-Fit.
+        if (s.crop) {
+          panel.style.overflow = 'hidden';
+          video.style.position = 'absolute';
+          video.style.width  = s.crop.monW + 'px';
+          video.style.height = s.crop.monH + 'px';
+          video.style.left   = (-s.crop.x) + 'px';
+          video.style.top    = (-s.crop.y) + 'px';
+          video.style.objectFit = 'none';
+        } else {
+          panel.style.overflow = '';
+          video.style.position = '';
+          video.style.width = video.style.height = '';
+          video.style.left = video.style.top = '';
+          video.style.objectFit = '';
         }
         var wantSource = s.sourceId || '';
         // Stream nur stoppen/wechseln wenn ein NEUER non-empty sourceId vorliegt
@@ -778,6 +917,26 @@ app.whenReady().then(() => {
     currentMasterVisible = visible;
     atlasLog(`[masterVisible] ${visible ? 'ON' : 'OFF'}`);
     republish();
+  });
+  // 7.6.2026: WPF-Self-Capture Display-Crop. Bounds-Update triggert ein
+  // syncIframes wenn aktuell eine WPF-Self-Source im Layout ist (Reconciler
+  // mutiert die Inline-Styles auf .panel + <video>). Minimize-Toggle wird
+  // dort auch behandelt (Source wird hidden via applyEffectiveVisibility).
+  wpfLink.on('wpfWindowBounds', (b: WpfBounds & { monitorIndex: number }) => {
+    const prev = wpfBounds;
+    wpfBounds = { left: b.left, top: b.top, width: b.width, height: b.height,
+                  minimized: b.minimized };
+    const moved = !prev
+      || prev.left !== b.left || prev.top !== b.top
+      || prev.width !== b.width || prev.height !== b.height
+      || prev.minimized !== b.minimized;
+    if (!moved) return;
+    atlasLog(`[wpfBounds] left=${b.left} top=${b.top} w=${b.width} h=${b.height} min=${b.minimized}`);
+    // iconic-Mechanismus: minimiert → WPF-Source als visible=false markieren
+    // (applyEffectiveVisibility + republish + syncIframes wie bei Window-
+    // Capture-Iconic).
+    applyWpfSelfIconic();
+    syncIframes();
   });
   wpfLink.start();
 

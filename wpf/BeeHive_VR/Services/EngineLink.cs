@@ -222,6 +222,27 @@ public sealed class EngineLink
         SendJson(payload);
     }
 
+    /// <summary>
+    /// Pushes die aktuelle WPF-Hauptfenster-Geometrie an Atlas. Wird benutzt
+    /// um die Self-Capture-Source vom Window-Mode auf Screen-Mode + CSS-Crop
+    /// umzustellen — damit ContextMenus / ComboBox-Dropdowns (eigene Top-Level-
+    /// Popup-HWNDs in WPF) im VR sichtbar werden. Atlas resolved Title=
+    /// AppEdition.ProductName auf einen Screen-Source und cropt das Video auf
+    /// (left, top, width, height) am angegebenen Monitor.
+    /// </summary>
+    public void PushWpfWindowBounds(int left, int top, int width, int height,
+                                    int monitorIndex, bool minimized)
+    {
+        var payload = new
+        {
+            type = "wpfWindowBounds",
+            left, top, width, height,
+            monitorIndex,
+            minimized,
+        };
+        SendJson(payload);
+    }
+
     /// <summary>Fordert die Engine auf, den Overlay-Anker auf die aktuelle Kopf-Pose zu setzen.</summary>
     public void PushRecenter()
     {

@@ -1,5 +1,7 @@
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Interop;
 using BeeHiveVR.ViewModels;
 
 namespace BeeHiveVR;
@@ -7,6 +9,12 @@ namespace BeeHiveVR;
 public partial class MainWindow : Window
 {
     private bool _loaded;
+    // VR-Self-Capture: Drosselt die Bounds-Pushes an Atlas (Drag feuert hunderte
+    // LocationChanged-Events pro Sekunde — Atlas-Renderer macht aber nur einen
+    // Style-Mutation-Roundtrip pro Push). 100 ms = 10 Hz, in VR kaum als Lag
+    // wahrnehmbar.
+    private System.Windows.Threading.DispatcherTimer? _wpfBoundsThrottle;
+    private bool _wpfBoundsDirty;
 
     public MainWindow()
     {
@@ -21,6 +29,77 @@ public partial class MainWindow : Window
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
         StateChanged += MainWindow_StateChanged;
+        LocationChanged += MainWindow_GeometryChanged;
+        SizeChanged += MainWindow_GeometryChanged;
+    }
+
+    // -------- VR-Self-Capture: Window-Bounds an Atlas pushen -----------------
+    // Hintergrund: Atlas erfasst das WPF-Fenster als Custom Source. Im normalen
+    // Window-Capture-Mode werden ContextMenu/ComboBox-Dropdown-HWNDs nicht
+    // mit-erfasst (separate Top-Level-Popups). Atlas wechselt für die WPF-Self-
+    // Source auf Display-Capture + CSS-Crop — dafür braucht er die aktuellen
+    // Outer-Bounds (DPI-aware physical pixels) plus Monitor-Index.
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(System.IntPtr hWnd, out RECT lpRect);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
+    private void MainWindow_GeometryChanged(object? sender, System.EventArgs e)
+        => RequestWpfBoundsPush();
+
+    /// <summary>Wird auch von außen (PushCurrentStateToEngine bei Pipe-
+    /// Connect) gerufen, damit Atlas direkt nach Reconnect die Bounds kennt.</summary>
+    public void PushWpfBoundsNow() => PushWpfBoundsCore();
+
+    private void RequestWpfBoundsPush()
+    {
+        // Throttle 100 ms — Drag-Events feuern dauerhaft, wir aggregieren.
+        _wpfBoundsDirty = true;
+        if (_wpfBoundsThrottle == null)
+        {
+            _wpfBoundsThrottle = new System.Windows.Threading.DispatcherTimer
+            {
+                Interval = System.TimeSpan.FromMilliseconds(100),
+            };
+            _wpfBoundsThrottle.Tick += (_, _) =>
+            {
+                if (!_wpfBoundsDirty) { _wpfBoundsThrottle!.Stop(); return; }
+                _wpfBoundsDirty = false;
+                PushWpfBoundsCore();
+            };
+        }
+        if (!_wpfBoundsThrottle.IsEnabled) _wpfBoundsThrottle.Start();
+    }
+
+    private void PushWpfBoundsCore()
+    {
+        try
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            if (hwnd == System.IntPtr.Zero) return;
+
+            bool minimized = WindowState == WindowState.Minimized;
+            int left = 0, top = 0, width = 0, height = 0;
+            if (!minimized && GetWindowRect(hwnd, out var r))
+            {
+                left = r.Left; top = r.Top;
+                width = r.Right - r.Left; height = r.Bottom - r.Top;
+            }
+
+            // Monitor-Index ermittelt Atlas selbst via electron.screen
+            // (intersect Bounds mit jedem Display) — WPF schickt nur die
+            // absoluten Outer-Bounds. monitorIndex Feld bleibt für Future-
+            // Use, derzeit 0.
+            BeeHiveVR.Services.EngineLink.Instance.PushWpfWindowBounds(
+                left, top, width, height, 0, minimized);
+        }
+        catch (System.Exception ex)
+        {
+            BeeHiveVR.Services.Logger.Warn($"PushWpfBoundsCore failed: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -48,11 +127,26 @@ public partial class MainWindow : Window
         {
             ShowInTaskbar = true;
         }
+        RequestWpfBoundsPush();
     }
+
+    private bool _connHookInstalled;
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
         EnsureLoaded();
+        // VR-Self-Capture: initialer Bounds-Push + bei jedem Pipe-Reconnect
+        // re-pushen (Atlas-Restart darf den State nicht verlieren). Hook nur
+        // einmal registrieren (Loaded kann mehrfach feuern bei Hide+Show).
+        PushWpfBoundsNow();
+        if (!_connHookInstalled)
+        {
+            _connHookInstalled = true;
+            BeeHiveVR.Services.EngineLink.Instance.ConnectionChanged += (_, connected) =>
+            {
+                if (connected) Dispatcher.BeginInvoke(new System.Action(PushWpfBoundsNow));
+            };
+        }
     }
 
     private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
