@@ -30,7 +30,9 @@ public class SettingsModel
     [JsonPropertyName("startInTray")]
     public bool StartInTray { get; set; } = false;
 
-    /// <summary>Welche Page beim Start aktiv ist: "Menu", "Layout", etc.</summary>
+    /// <summary>Welche Page beim Start aktiv ist. Erlaubt: "Menu", "Layout",
+    /// "Dashies", "Trading Paints", "Settings". Unbekannte Werte fallen auf
+    /// "Layout" zurück (Validierung in MainViewModel-Konstruktor).</summary>
     [JsonPropertyName("startPage")]
     public string StartPage { get; set; } = "Layout";
 

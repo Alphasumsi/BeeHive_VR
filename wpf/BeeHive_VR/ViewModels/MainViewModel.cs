@@ -242,6 +242,17 @@ public partial class MainViewModel : ObservableObject
         // (fehlende Keys werden hinten angehängt, unbekannte Keys ignoriert).
         InitNavItems(cfg.NavOrder);
 
+        // Start-Page aus den Settings übernehmen. Validierung gegen
+        // bekannte Section-Keys — bei unbekanntem Wert (alte settings.json,
+        // Typo) Fallback auf Layout. Setzt ActiveSection BEVOR der
+        // OnActiveSectionChanged-Handler an die UI geht; SyncNavActive
+        // pickt den richtigen Nav-Eintrag.
+        string[] validStartPages =
+            { "Menu", "Layout", "Dashies", "Trading Paints", "Settings" };
+        ActiveSection = System.Array.IndexOf(validStartPages, cfg.StartPage) >= 0
+            ? cfg.StartPage
+            : "Layout";
+
         // Initialer Stand + Live-Updates vom IRacingService
         var iracing = IRacingService.Instance;
         IsConnected = iracing.IsConnected;

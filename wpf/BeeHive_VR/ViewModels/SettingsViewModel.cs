@@ -31,8 +31,12 @@ public partial class SettingsViewModel : ObservableObject
     [ObservableProperty] private bool _rememberWindowPositionAndScale;
     [ObservableProperty] private string _startPage = "Layout";
 
-    /// <summary>Optionen für das Start-Page-Dropdown.</summary>
-    public string[] StartPageOptions { get; } = new[] { "Menu", "Layout" };
+    /// <summary>Optionen für das Start-Page-Dropdown. Werte = Section-Keys
+    /// aus MainWindow.xaml's ConverterParameter-Tags.</summary>
+    public string[] StartPageOptions { get; } = new[]
+    {
+        "Menu", "Layout", "Dashies", "Trading Paints", "Settings"
+    };
 
     // --- Keybinds --------------------------------------------------------
     /// <summary>Eine Zeile pro bindbarer Aktion (aus dem Katalog).</summary>
