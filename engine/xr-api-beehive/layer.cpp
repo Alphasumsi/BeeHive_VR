@@ -217,6 +217,40 @@ void main(uint2 tid : SV_DispatchThreadID)
             // EnsureSetup is idempotent — it keeps trying every frame until
             // Electron has populated the FrameSlot and our swapchain is built.
             if (EnsureSetup()) {
+                // 17.6.2026 — Atlas-Restart-Re-Attach. Beim Neustart der App während
+                // iRacing läuft erzeugt der neue Atlas-Prozess ein neues BrowserWindow
+                // (neues hwnd + producerPid). Ohne Re-Attach captured WGC weiter das
+                // tote alte HWND → Standbild — der generation-Watchdog merkt es NICHT,
+                // weil der neue Atlas die generation munter weiterzählt; neue Quad-Rects
+                // gegen die alte Textur wirken zudem „vertauscht". Hwnd/PID-Wechsel
+                // erkennen → nur die WGC-Session neu aufsetzen (Swapchain/Space bleiben;
+                // der Resize-Check unten passt die Swapchain an, falls die neue Quelle
+                // eine andere Größe hat). Doppel-Read-Guard gegen torn slot (analog zur
+                // Recenter-Probe). Bei ctor-Fehler hwnd/pid NICHT übernehmen → die
+                // Bedingung bleibt wahr → der nächste Frame versucht es erneut.
+                if (m_mapView && m_captureWindow) {
+                    FrameSlot a{}, b{};
+                    std::memcpy(&a, m_mapView, sizeof(a));
+                    std::memcpy(&b, m_mapView, sizeof(b));
+                    const HWND newHwnd = (HWND)(uintptr_t)a.hwnd;
+                    if (a.producerPid == b.producerPid && a.hwnd == b.hwnd &&
+                        a.generation != 0 && a.hwnd != 0 &&
+                        (newHwnd != m_capturedHwnd || a.producerPid != m_capturedPid)) {
+                        Log(fmt::format("xrEndFrame: Atlas restart (hwnd 0x{:x}->0x{:x}, pid {}->{}) — WGC re-attach\n",
+                                        (uintptr_t)m_capturedHwnd, a.hwnd, m_capturedPid, a.producerPid));
+                        m_captureWindow.reset();
+                        try {
+                            m_captureWindow =
+                                std::make_unique<capture::CaptureWindowWinRT>(m_appDevice, newHwnd);
+                            m_capturedHwnd = newHwnd;
+                            m_capturedPid  = a.producerPid;
+                        } catch (const winrt::hresult_error& e) {
+                            Log(fmt::format("xrEndFrame: re-attach failed hr=0x{:08x} ({}) — retry next frame\n",
+                                            (uint32_t)e.code().value, winrt::to_string(e.message())));
+                        }
+                    }
+                }
+
                 // B7 (5.6.2026): Recenter-Trigger aus Electron. Atlas inkrementiert
                 // recenterEpoch pro WPF-Recenter-Keybind; bei Wechsel bauen wir
                 // m_localSpace neu mit aktueller Head-Pose als Offset auf.
@@ -513,6 +547,7 @@ void main(uint2 tid : SV_DispatchThreadID)
                                 slot.generation, slot.producerPid, slot.hwnd,
                                 slot.width, slot.height, slot.format));
                 m_capturedHwnd = (HWND)(uintptr_t)slot.hwnd;
+                m_capturedPid  = slot.producerPid;
                 try {
                     m_captureWindow =
                         std::make_unique<capture::CaptureWindowWinRT>(m_appDevice, m_capturedHwnd);
@@ -1689,6 +1724,7 @@ void main(uint2 tid : SV_DispatchThreadID)
         // produces ID3D11Texture2D surfaces on the device we hand in.
         std::unique_ptr<capture::ICaptureWindow> m_captureWindow;
         HWND m_capturedHwnd{nullptr};
+        uint32_t m_capturedPid{0};   // Atlas producerPid → Restart-Erkennung (Re-Attach)
 
         // Place-in-VR.
         XrActionSet m_inputActionSet{XR_NULL_HANDLE};
