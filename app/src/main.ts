@@ -18,6 +18,7 @@
 import { app, BrowserWindow, desktopCapturer, screen as electronScreen } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 import started from 'electron-squirrel-startup';
 import koffi from 'koffi';
 
@@ -214,6 +215,13 @@ let windowRefreshTimer: NodeJS.Timeout | null = null;
 // auf Screen-Capture des betroffenen Monitors um und cropen das Video per
 // CSS-overflow:hidden + negative position auf den Window-Rect.
 const WPF_SELF_TITLE = 'BeeHive VR';   // = AppEdition.ProductName
+// 17.6.2026 — Perf: Display-Capture dupliziert den GANZEN Monitor pro Frame
+// (Full-Monitor-DXGI-Duplication + CSS-Crop) → teurer Video-Decode, treibt die
+// Electron-CPU-Last hoch und hungert iRacings Render-Thread aus (~12 FPS / +22
+// CPU-Punkte in der PresentMon-Messung). Auf false fällt WPF-Self auf das
+// strukturell billigere Window-Capture zurück. Trade-off: ContextMenus/Dropdowns
+// (separate Popup-HWNDs) sind in VR wieder unsichtbar — bewusst akzeptiert.
+const WPF_SELF_DISPLAY_MODE = false;
 // Cache: Display-ID (electron.screen) → sourceId (desktopCapturer). Wird im
 // selben 3-s-Tick mit refreshWindowSources mit-aktualisiert. Display-ID ist
 // stabil über den App-Lebenszyklus, sourceId kann sich beim Monitor-
@@ -582,7 +590,7 @@ function syncIframes(): void {
       // Popup-HWNDs in WPF und fehlen im Window-Capture-Mode.
       let sourceId = windowSourceIdByTitle.get(target) ?? '';
       let crop: IframeSpec['crop'] = null;
-      if (target === WPF_SELF_TITLE) {
+      if (WPF_SELF_DISPLAY_MODE && target === WPF_SELF_TITLE) {
         const c = resolveWpfCrop();
         if (c) {
           sourceId = c.sourceId;
@@ -797,6 +805,29 @@ function resizeAtlasWindow(newW: number, newH: number): void {
   }
 }
 
+// 17.6.2026 — Perf: Electron-Prozesse (Main + GPU + jeder Renderer) auf
+// BELOW_NORMAL. iRacings Render-Thread ist an vollen Grids CPU-bound; ohne
+// Priorität konkurrieren BeeHives Prozesse um dieselben Kerne (PresentMon:
+// +14 CPU-Punkte gesamt bei nur +1 ms iRacing-CPU-Busy = Kontention) → längere
+// FPS-Drops. BELOW_NORMAL lässt Windows iRacing an den Engstellen Vorrang geben,
+// BeeHive weicht zurück statt zu konkurrieren. getAppMetrics() liefert alle
+// Electron-PIDs; periodisch nachgezogen, weil Renderer-Prozesse erst beim Laden
+// der Dashies/Sources entstehen. Auf false zum Vergleichsmessen.
+const LOW_PRIORITY = true;
+let lowPriorityTimer: ReturnType<typeof setInterval> | null = null;
+function applyLowPriority(): void {
+  if (!LOW_PRIORITY) return;
+  const below = os.constants.priority.PRIORITY_BELOW_NORMAL;
+  for (const m of app.getAppMetrics()) {
+    try { os.setPriority(m.pid, below); } catch { /* Prozess weg / kein Zugriff */ }
+  }
+}
+function startLowPriority(): void {
+  if (lowPriorityTimer) return;
+  applyLowPriority();
+  lowPriorityTimer = setInterval(applyLowPriority, 5000);
+}
+
 function createCapturedWindow() {
   const win = new BrowserWindow({
     width: atlasWidth,
@@ -839,10 +870,12 @@ function createCapturedWindow() {
   if (process.env.BEEHIVE_ATLAS_DEVTOOLS) {
     win.webContents.openDevTools({ mode: 'detach' });
   }
-  // Match iRacing's typical 90 Hz HMD rate. WGC samples this window on the
-  // compositor's clock — keeping the renderer at HMD rate avoids the visible
-  // 60↔90 beat we saw in the offscreen path.
-  win.webContents.setFrameRate(90);
+  // 17.6.2026 — setFrameRate ENTFERNT: wirkungslos bei diesem Fenstertyp.
+  // Electrons setFrameRate greift NUR bei offscreen-Rendering; unser Atlas ist
+  // ein sichtbares (cloaked) WGC-Fenster (siehe Kopf-Kommentar) → reiner No-Op.
+  // Die Compositing-Rate ist hier nicht drosselbar (der offscreen-Pfad, wo es
+  // ginge, wurde wegen Content-Update-Jitter verworfen). CPU-Entlastung läuft
+  // stattdessen über Prozess-Priorität (applyLowPriority) + quellseitige Caps.
   win.webContents.on('render-process-gone', (_e, info) => {
     console.error('[main] renderer gone:', info);
   });
@@ -1003,6 +1036,7 @@ app.whenReady().then(() => {
   placeOut.start();
 
   createCapturedWindow();
+  startLowPriority();
 });
 
 app.on('before-quit', () => {
