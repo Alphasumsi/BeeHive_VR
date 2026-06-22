@@ -561,8 +561,9 @@
                                     <Border Style="{StaticResource SubGroup}" Visibility="{Binding IsChecked, ElementName=RelBadge, Converter={StaticResource BoolToVis}}">
                                         <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="260"/></Grid.ColumnDefinitions>
                                             <TextBlock Grid.Column="0" Text="Badge Format" Style="{StaticResource RowLabel}"/>
-                                            <ComboBox Grid.Column="1" SelectedIndex="4" VerticalAlignment="Center" Tag="badge.badgeFormat" SelectionChanged="Combo_Changed">
+                                            <ComboBox Grid.Column="1" SelectedIndex="5" VerticalAlignment="Center" Tag="badge.badgeFormat" SelectionChanged="Combo_Changed">
                                                 <ComboBoxItem Content="License + full iR (combo)" Tag="license-color-fullrating-combo"/>
+                                                <ComboBoxItem Content="License + iR (combo)" Tag="license-color-shortrating-combo"/>
                                                 <ComboBoxItem Content="Full iR color, no license" Tag="fullrating-color-no-license"/>
                                                 <ComboBoxItem Content="iR color, no license" Tag="rating-color-no-license"/>
                                                 <ComboBoxItem Content="License color, full iR b/w" Tag="license-color-fullrating-bw"/>
