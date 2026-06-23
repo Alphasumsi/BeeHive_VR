@@ -39,6 +39,25 @@ public sealed class DashiesPreviewService
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
 
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int nIndex);
+
+    // Virtual-Screen-Bounding-Rect = der gesamte sichtbare Desktop über alle
+    // Monitore (single, ultrawide, triple … alles dasselbe Rechteck). Dient nur
+    // dazu, die gemerkte Position beim Öffnen in den sichtbaren Bereich zu klemmen.
+    private const int SM_XVIRTUALSCREEN = 76;
+    private const int SM_YVIRTUALSCREEN = 77;
+    private const int SM_CXVIRTUALSCREEN = 78;
+    private const int SM_CYVIRTUALSCREEN = 79;
+
+    // Widget-Id der aktuell offenen Preview — Schlüssel für die Per-Widget-
+    // Positionsspeicherung beim Schließen.
+    private string? _currentWidgetId;
+
     /// <summary>
     /// Baut die Per-Widget-URL gegen den lokalen Adapter. <paramref name="variantId"/>
     /// ist Vorbereitung für Multi-Variant-Support: bei null/leer wird die URL
@@ -64,7 +83,8 @@ public sealed class DashiesPreviewService
     {
         lock (_gate)
         {
-            CloseLocked();
+            CloseLocked();              // speichert die Position des bisher offenen Widgets
+            _currentWidgetId = widgetId; // ab jetzt gilt die neue Widget-Id für den Capture
 
             var exePath = ResolveExePath();
             if (exePath == null)
@@ -91,7 +111,8 @@ public sealed class DashiesPreviewService
                 "--render-scale=1 " +
                 "--chromeless " +
                 "--bg=1F1535 " +
-                $"--title={WindowTitle}";
+                $"--title={WindowTitle}" +
+                PositionArgs(widgetId, width, height);
 
             try
             {
@@ -155,6 +176,7 @@ public sealed class DashiesPreviewService
     {
         if (_process != null)
         {
+            CapturePositionLocked();
             try
             {
                 if (!_process.HasExited)
@@ -164,6 +186,52 @@ public sealed class DashiesPreviewService
             catch { /* best effort */ }
             _process = null;
         }
+    }
+
+    /// <summary>
+    /// Liest die aktuelle Fenster-Position (linke obere Ecke, Screen-Pixel) und
+    /// persistiert sie pro Widget. Wird vor jedem Kill aufgerufen — auch bei
+    /// Resize-Neustart, damit die Position erhalten bleibt. Best-effort: fehlendes
+    /// HWND oder minimiertes Fenster (Sentinel -32000) werden ignoriert.
+    /// </summary>
+    private void CapturePositionLocked()
+    {
+        if (_process == null || _process.HasExited || _currentWidgetId == null) return;
+        _process.Refresh();
+        var hwnd = _process.MainWindowHandle;
+        if (hwnd == IntPtr.Zero) return;
+        if (!GetWindowRect(hwnd, out var rc)) return;
+        if (rc.Left <= -30000 || rc.Top <= -30000) return; // minimiert → nicht speichern
+        SettingsStore.Current.DashiesPreviewPos[_currentWidgetId] = new[] { rc.Left, rc.Top };
+        SettingsStore.Save();
+    }
+
+    /// <summary>
+    /// Liefert " --x=.. --y=.." für die zuletzt gemerkte Position dieses Widgets,
+    /// in den sichtbaren Desktop geklemmt. Kein Verwerfen, keine Schwelle: liegt
+    /// die Position im Bild (Normalfall), bleibt sie unverändert; hat sich die
+    /// Auflösung/Anordnung geändert und das Fenster läge teils außerhalb, wird es
+    /// nur in Sicht gezogen statt auf Default zu springen. "" nur wenn dieses
+    /// Widget noch nie eine Position hatte → browser-host nutzt sein Default.
+    /// </summary>
+    private static string PositionArgs(string widgetId, int width, int height)
+    {
+        if (!SettingsStore.Current.DashiesPreviewPos.TryGetValue(widgetId, out var pos)
+            || pos == null || pos.Length < 2)
+            return "";
+        int sx = pos[0], sy = pos[1];
+
+        int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+        int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+        int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+        int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        if (vw <= 0 || vh <= 0) return $" --x={sx} --y={sy}"; // Metrics weg → ungeprüft
+
+        // In den sichtbaren Desktop klemmen. Fenster breiter/höher als der Desktop
+        // → an die linke/obere Kante (Math.Max gewinnt gegen das negative Limit).
+        int cx = Math.Max(vx, Math.Min(sx, vx + vw - width));
+        int cy = Math.Max(vy, Math.Min(sy, vy + vh - height));
+        return $" --x={cx} --y={cy}";
     }
 
     /// <summary>

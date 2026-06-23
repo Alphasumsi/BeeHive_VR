@@ -77,6 +77,13 @@ public class SettingsModel
     [JsonPropertyName("uiScale")]
     public double UiScale { get; set; } = 1.0;
 
+    // --- Dashies-Preview-Fenster (Position pro Widget über Sessions merken) ---
+    // widgetId → [x, y] in Screen-Pixel. Pro Widget, damit Previews sich nicht
+    // gegenseitig die Position „erben". Fehlt ein Widget → noch nie gemerkt →
+    // browser-host nutzt sein Default-Placement (100,100).
+    [JsonPropertyName("dashiesPreviewPos")]
+    public Dictionary<string, int[]> DashiesPreviewPos { get; set; } = new();
+
     // --- Keybinds ---------------------------------------------------------
     /// <summary>Aktion-Name (enum) → serialisierter InputChord. Leer = nicht belegt.</summary>
     [JsonPropertyName("keybinds")]

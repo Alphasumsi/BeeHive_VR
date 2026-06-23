@@ -5,7 +5,7 @@
 // es als XrCompositionLayerQuad in iRacing.
 //
 // Aufruf:
-//   browser-host.exe --url=<url> [--title=<title>] [--width=<px>] [--height=<px>]
+//   browser-host.exe --url=<url> [--title=<title>] [--width=<px>] [--height=<px>] [--x=<px>] [--y=<px>]
 //
 // Wenn --title gesetzt ist, überschreibt es jede Page-Title-Änderung. Damit ist der Window-Title
 // stabil und der Layer kann zuverlässig per Substring matchen.
@@ -37,6 +37,8 @@ std::wstring g_initialUrl;
 std::wstring g_fixedTitle;
 int g_initialWidth{800};
 int g_initialHeight{600};
+int g_initialX{100};   // Fenster-Startposition (Screen-Pixel). Default 100,100 wie bisher.
+int g_initialY{100};   // Per --x/--y überschrieben (Preview-Position-Restore aus den Settings).
 int g_contentWidth{800};  // CSS-Pixel-Breite des Contents (= Window/RenderScale)
 int g_contentHeight{600};
 float g_renderScale{2.0f}; // Faktor, mit dem Window-Größe und ZoomFactor multipliziert werden
@@ -415,6 +417,8 @@ struct ParsedArgs {
     std::wstring title;
     int width{800};
     int height{600};
+    int x{100};   // Fenster-Startposition; Default 100,100 (kein --x/--y → wie bisher).
+    int y{100};
     float renderScale{2.0f};
     bool devtools{false};
     bool cloak{false};
@@ -443,6 +447,10 @@ ParsedArgs ParseOurArgs() {
             a.width = _wtoi(arg.substr(8).c_str());
         } else if (arg.rfind(L"--height=", 0) == 0) {
             a.height = _wtoi(arg.substr(9).c_str());
+        } else if (arg.rfind(L"--x=", 0) == 0) {
+            a.x = _wtoi(arg.substr(4).c_str());
+        } else if (arg.rfind(L"--y=", 0) == 0) {
+            a.y = _wtoi(arg.substr(4).c_str());
         } else if (arg.rfind(L"--render-scale=", 0) == 0) {
             a.renderScale = (float)_wtof(arg.substr(15).c_str());
             if (a.renderScale <= 0.f) a.renderScale = 1.f;
@@ -587,6 +595,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
     g_fixedTitle = args.title;
     g_contentWidth = args.width > 0 ? args.width : 800;
     g_contentHeight = args.height > 0 ? args.height : 600;
+    g_initialX = args.x;
+    g_initialY = args.y;
     g_renderScale = args.renderScale;
     // Render-Scale: Window-Größe verdoppelt o.ä., ZoomFactor entsprechend → Content
     // rendert auf 2× device pixels für sharp WGC-Capture, Aspect bleibt zum Content.
@@ -643,7 +653,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE, _In_ LPWSTR,
                                L"BrowserHostWnd",
                                initialTitle.c_str(),
                                style,
-                               100, 100, winW, winH,
+                               g_initialX, g_initialY, winW, winH,
                                nullptr, nullptr, hInstance, nullptr);
     if (!g_hwnd) {
         LogLine("CreateWindowExW failed");
