@@ -33,6 +33,13 @@ namespace {
     constexpr uint32_t k_logRotateCheckInterval = 200;
     constexpr uintmax_t k_logMaxBytes = 3 * 1024 * 1024;
     uint32_t g_writesSinceRotateCheck = 0;
+
+    // 25.6.2026: Log() ist seit dem Stall-Watchdog (layer.cpp) nicht mehr nur
+    // vom Render-Thread aus erreichbar. RotateLogIfNeeded schließt/öffnet den
+    // Stream und std::localtime teilt einen statischen Puffer → ohne Lock wäre
+    // nebenläufiges Loggen ein Daten-/Stream-Race. Ein einziger Mutex um den
+    // gesamten InternalLog reicht (Log-Volumen ist niedrig).
+    std::mutex g_logMutex;
 } // namespace
 
 namespace openxr_api_layer {
@@ -66,7 +73,7 @@ namespace openxr_api_layer::log {
                 oldFile += ".old";
                 std::filesystem::remove(oldFile, ec);
                 std::filesystem::rename(logFile, oldFile, ec);
-                logStream.open(logFile.string(), std::ios_base::ate);
+                logStream.open(logFile.string(), std::ios_base::app);
             } catch (...) {
                 // Rotation darf nicht werfen — wenn was schiefgeht, einfach
                 // weiterloggen sobald der Stream wieder offen ist (oder gar
@@ -76,6 +83,7 @@ namespace openxr_api_layer::log {
 
         // Utility logging function.
         void InternalLog(const char* fmt, va_list va) {
+            std::lock_guard<std::mutex> lock(g_logMutex);
             const std::time_t now = std::time(nullptr);
 
             char buf[1024];

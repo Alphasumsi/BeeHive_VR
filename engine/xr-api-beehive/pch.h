@@ -40,6 +40,9 @@
 #include <iomanip>
 #include <iostream>
 #include <mutex>
+#include <thread>
+#include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <sstream>

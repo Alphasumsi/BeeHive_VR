@@ -106,7 +106,12 @@ XrResult __declspec(dllexport) XRAPI_CALL
         } catch (...) {
             // Logger-Setup darf nie werfen — silent fall-through zu open()
         }
-        logStream.open(logFile.string(), std::ios_base::ate);
+        // 25.6.2026: app statt ate. ate öffnet ofstream als "w" (truncate) →
+        // jeder iRacing-Start leerte die engine.log. Gewollt ist Anhängen über
+        // Sessions hinweg + die Startup-Rotation oben (>3 MB → .old). Die
+        // Debug-Loganzeige in der WPF ist davon unberührt (eigene In-Memory-
+        // View, liest die Datei nicht; resettet beim WPF-Neustart von selbst).
+        logStream.open(logFile.string(), std::ios_base::app);
     }
 
     DebugLog("--> xrNegotiateLoaderApiLayerInterface\n");
