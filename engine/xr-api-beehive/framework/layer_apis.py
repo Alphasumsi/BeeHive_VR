@@ -4,6 +4,7 @@ override_functions = [
     "xrCreateSession",                # extract the app's ID3D11Device from the binding chain
     "xrDestroySession",               # tear down our resources before the runtime
     "xrEndFrame",                     # lazy-setup + append our quad layers
+    "xrWaitFrame",                    # 25.6.2026: nur Timing (Stall-Watchdog) — Runtime-Backpressure vs iRacing-Render trennen
     "xrAttachSessionActionSets",      # piggyback our action set if iRacing ever attaches (defensive)
 ]
 
