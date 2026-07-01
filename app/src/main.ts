@@ -97,21 +97,9 @@ if (started) app.quit();
 // gesamten BeeHive_VR_Atlas-Prozess als Background → setInterval-Timer
 // gestreckt, F5-Heartbeat zu selten → Watchdog trippt grundlos. Diese
 // Switches halten den Main-Process-Timer und Renderer auf Vordergrund-Niveau.
-//
-// A/B-Freeze-Test (1.7.2026): Verdacht, dass genau diese Switches den
-// gecloakten Atlas auf volle Compositing-Rate zwingen → WGC liefert jeden
-// Compositor-Tick einen frischen Frame → mehr Kontention auf iRacings geteiltem
-// D3D11-Device-Lock → Render-Stall (GPU idle). BEEHIVE_NO_CHROMIUM_FOREGROUND
-// gesetzt = Switches AUS = Atlas wieder occlusion-gedrosselt (Gegenprobe).
-// Default = an = Status quo, kein Risiko für den Normalbetrieb.
-if (!process.env.BEEHIVE_NO_CHROMIUM_FOREGROUND) {
-  app.commandLine.appendSwitch('disable-background-timer-throttling');
-  app.commandLine.appendSwitch('disable-renderer-backgrounding');
-  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
-  atlasLog('[foreground] Chromium-Foreground-Switches AN (Status quo) — Atlas voll kompositiert');
-} else {
-  atlasLog('[foreground] BEEHIVE_NO_CHROMIUM_FOREGROUND gesetzt — Foreground-Switches AUS (Freeze-A/B-Test, Atlas occlusion-gedrosselt)');
-}
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 
 // Two layers of single-instance enforcement:
 // 1. Electron's app-level lock (handles the "user double-clicked the shortcut" case)
