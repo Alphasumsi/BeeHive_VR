@@ -974,7 +974,6 @@ app.whenReady().then(() => {
       || prev.width !== b.width || prev.height !== b.height
       || prev.minimized !== b.minimized;
     if (!moved) return;
-    atlasLog(`[wpfBounds] left=${b.left} top=${b.top} w=${b.width} h=${b.height} min=${b.minimized}`);
     // iconic-Mechanismus: minimiert → WPF-Source als visible=false markieren
     // (applyEffectiveVisibility + republish + syncIframes wie bei Window-
     // Capture-Iconic).
@@ -1006,7 +1005,6 @@ app.whenReady().then(() => {
     // sich ändert — kein Spam).
     if (u.hoveredId !== currentHoveredId) {
       currentHoveredId = u.hoveredId;
-      atlasLog(`[hoveredId] "${u.hoveredId}"`);
       syncIframes();
     }
     // JSON keys match WPF's EngineLink.PlaceUpdate parser (legacy field names

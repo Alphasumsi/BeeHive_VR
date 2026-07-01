@@ -5,7 +5,7 @@ namespace BeeHiveVR.Services;
 
 /// <summary>
 /// Findet den eingebetteten Vite-Build der Dashies zur Laufzeit. Wird vom
-/// IrdashiesAdapterService (statische Files) und vom IrdashiesConfigStore
+/// DashieAdapterService (statische Files) und vom IrdashiesConfigStore
 /// (Fallback dashboard.json) genutzt.
 ///
 /// Such-Reihenfolge:

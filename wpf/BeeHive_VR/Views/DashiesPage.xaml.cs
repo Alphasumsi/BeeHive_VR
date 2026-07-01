@@ -216,7 +216,7 @@ public partial class DashiesPage : UserControl
         if (IsVisible) return;
         _previewOpen = false;
         DashiesPreviewService.Instance.Close();
-        IrdashiesAdapterService.Instance.SetMock(false);
+        DashieAdapterService.Instance.SetMock(false);
         PreviewButton.Content = "Preview";
     }
 
@@ -442,7 +442,7 @@ public partial class DashiesPage : UserControl
     {
         if (!_ready || _loading || _activeWidget == null) return;
         IrdashiesConfigStore.Instance.PatchWidgetConfig(_activeWidget, patch);
-        IrdashiesAdapterService.Instance.BroadcastDashboardUpdated();
+        DashieAdapterService.Instance.BroadcastDashboardUpdated();
     }
 
     private void Toggle_Changed(object sender, RoutedEventArgs e)
@@ -954,7 +954,7 @@ public partial class DashiesPage : UserControl
         {
             _previewOpen = false;
             DashiesPreviewService.Instance.Close();
-            IrdashiesAdapterService.Instance.SetMock(false);
+            DashieAdapterService.Instance.SetMock(false);
             PreviewButton.Content = "Preview";
             ShowStatusInfo("Preview closed.");
             return;
@@ -968,9 +968,9 @@ public partial class DashiesPage : UserControl
             return;
         }
 
-        IrdashiesAdapterService.Instance.Start(); // idempotent
+        DashieAdapterService.Instance.Start(); // idempotent
         _previewWidgetId = id;
-        IrdashiesAdapterService.Instance.SetMock(MockToggle.IsChecked == true, id);
+        DashieAdapterService.Instance.SetMock(MockToggle.IsChecked == true, id);
 
         var (w, h) = ReadFormat();
         bool ok = DashiesPreviewService.Instance.Show(id, w, h);
@@ -982,7 +982,7 @@ public partial class DashiesPage : UserControl
         }
         else
         {
-            IrdashiesAdapterService.Instance.SetMock(false);
+            DashieAdapterService.Instance.SetMock(false);
             ShowStatusError("Preview failed — browser-host.exe not found (set it in Settings).");
         }
     }
@@ -999,7 +999,7 @@ public partial class DashiesPage : UserControl
 
         // Adapter starten falls noch nicht — sonst gibt die kopierte URL 404
         // wenn der User sie woanders öffnet (OBS-Browser-Source o.ä.).
-        IrdashiesAdapterService.Instance.Start(); // idempotent
+        DashieAdapterService.Instance.Start(); // idempotent
 
         var url = DashiesPreviewService.BuildUrl(id);
         try
@@ -1016,7 +1016,7 @@ public partial class DashiesPage : UserControl
     private void MockToggle_Changed(object sender, RoutedEventArgs e)
     {
         if (_previewOpen)
-            IrdashiesAdapterService.Instance.SetMock(MockToggle.IsChecked == true, _previewWidgetId);
+            DashieAdapterService.Instance.SetMock(MockToggle.IsChecked == true, _previewWidgetId);
     }
 
     // ---- JSON-Pfad-Helfer + getaggte Controls ---------------------------------

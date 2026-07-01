@@ -16,7 +16,7 @@ namespace BeeHiveVR.Services;
 ///   2) %APPDATA%\irdashies\config.json (Original-irdashies-Installation)
 ///   3) Eingebettete dashies-dist\dashboard.json → Minimal-Fallback.
 ///
-/// Genutzt von: IrdashiesAdapterService (Lesen, BuildDashboard) und dem Dashies-Tab
+/// Genutzt von: DashieAdapterService (Lesen, BuildDashboard) und dem Dashies-Tab
 /// (Schreiben einzelner Widget-Configs).
 /// </summary>
 public sealed class IrdashiesConfigStore

@@ -66,7 +66,7 @@ public sealed class DashiesPreviewService
     /// </summary>
     public static string BuildUrl(string widgetId, string? variantId = null)
     {
-        int port = IrdashiesAdapterService.Port;
+        int port = DashieAdapterService.Port;
         var url = $"http://localhost:{port}/dashie.html?widget={widgetId}";
         if (!string.IsNullOrEmpty(variantId))
             url += $"&variant={Uri.EscapeDataString(variantId)}";

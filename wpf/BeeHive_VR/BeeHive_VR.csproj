@@ -47,7 +47,7 @@
 
   <!-- Vite-Build der Dashies (gepinnter Snapshot, kein D:\VBdev\irdashies-Pfad
        zur Laufzeit). Wird via CopyToOutputDirectory neben die Exe gelegt,
-       der IrdashiesAdapterService serviert daraus. Update-Workflow:
+       der DashieAdapterService serviert daraus. Update-Workflow:
        Vite-Build in D:\VBdev\irdashies\ → Files hierher kopieren
        (honeyvr.html → dashie.html beim Copy umbenennen) → committen. -->
   <ItemGroup>

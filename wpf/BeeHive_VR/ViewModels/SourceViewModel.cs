@@ -117,7 +117,7 @@ public partial class SourceViewModel : ObservableObject
                 }
                 bg["opacity"] = JsonValue.Create(pct);
             });
-            IrdashiesAdapterService.Instance.BroadcastDashboardUpdated();
+            DashieAdapterService.Instance.BroadcastDashboardUpdated();
             OnPropertyChanged();
         }
     }

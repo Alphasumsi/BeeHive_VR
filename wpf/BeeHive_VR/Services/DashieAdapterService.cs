@@ -21,10 +21,10 @@ namespace BeeHiveVR.Services;
 /// Instanz (~30 Hz) — die globale IRacingService (2 Hz, headset-verifizierte
 /// Session/Spotter-Logik) bleibt unangetastet.
 /// </summary>
-public sealed class IrdashiesAdapterService
+public sealed class DashieAdapterService
 {
-    private static IrdashiesAdapterService? _instance;
-    public static IrdashiesAdapterService Instance => _instance ??= new IrdashiesAdapterService();
+    private static DashieAdapterService? _instance;
+    public static DashieAdapterService Instance => _instance ??= new DashieAdapterService();
 
     // Bewusst nicht 3000 (irdashies-Default) / 8888 (SimHub) — kollisionsarm.
     public const int Port = 8723;
@@ -93,7 +93,7 @@ public sealed class IrdashiesAdapterService
 
     public bool MockEnabled => _animatedRequested || _staticRequested;
 
-    private IrdashiesAdapterService() { }
+    private DashieAdapterService() { }
 
     public void Start()
     {
@@ -111,7 +111,7 @@ public sealed class IrdashiesAdapterService
         }
         catch (HttpListenerException ex)
         {
-            Logger.Error($"IrdashiesAdapter: HttpListener.Start fehlgeschlagen ({ex.Message}). " +
+            Logger.Error($"DashieAdapter: HttpListener.Start fehlgeschlagen ({ex.Message}). " +
                          $"Falls Zugriff verweigert: einmalig 'netsh http add urlacl url=http://localhost:{Port}/ user=Jeder'.");
             _listener = null;
             return;
@@ -124,7 +124,7 @@ public sealed class IrdashiesAdapterService
         _sdk.OnDisconnected += OnSdkDisconnected;
         _sdk.OnTelemetryData += OnSdkTelemetry;
         _sdk.OnSessionInfo += OnSdkSession;
-        _sdk.OnException += ex => Logger.Warn($"IrdashiesAdapter: SDK-Exception: {ex.Message}");
+        _sdk.OnException += ex => Logger.Warn($"DashieAdapter: SDK-Exception: {ex.Message}");
         _sdk.Start();
 
         _ = Task.Run(() => ListenLoopAsync(_cts.Token));
@@ -134,7 +134,7 @@ public sealed class IrdashiesAdapterService
         // togglen den Schalter automatisch.
         SetMockStatic(true);
 
-        Logger.Info($"IrdashiesAdapter: läuft auf http://localhost:{Port}/");
+        Logger.Info($"DashieAdapter: läuft auf http://localhost:{Port}/");
     }
 
     public void Stop()
@@ -154,7 +154,7 @@ public sealed class IrdashiesAdapterService
         _clients.Clear();
         _latestTelemetryBytes = null;
         _latestSessionElement = null;
-        Logger.Info("IrdashiesAdapter: gestoppt");
+        Logger.Info("DashieAdapter: gestoppt");
     }
 
     // --- iRacing-SDK-Callbacks (laufen auf SDK-Hintergrund-Tasks) ---
@@ -166,7 +166,7 @@ public sealed class IrdashiesAdapterService
         // BeeHive_VR: static-Mock-Fallback aus, sobald echtes iRacing da ist.
         SetMockStatic(false);
         BroadcastFireAndForget(new { type = "runningState", data = true });
-        Logger.Info("IrdashiesAdapter: iRacing verbunden");
+        Logger.Info("DashieAdapter: iRacing verbunden");
     }
 
     private void OnSdkDisconnected()
@@ -180,7 +180,7 @@ public sealed class IrdashiesAdapterService
         SetMockStatic(true);
         // Bei aktivem Mock bleibt „running" true (Mock-Loop sendet weiter).
         BroadcastFireAndForget(new { type = "runningState", data = MockEnabled });
-        Logger.Info("IrdashiesAdapter: iRacing getrennt");
+        Logger.Info("DashieAdapter: iRacing getrennt");
     }
 
     // --- Mock-Mode: synthetische Telemetrie für die Vorschau ---
@@ -228,7 +228,7 @@ public sealed class IrdashiesAdapterService
             _mockCts = cts;
             _ = Task.Run(() => MockLoopAsync(cts.Token));
             BroadcastFireAndForget(new { type = "runningState", data = true });
-            Logger.Info($"IrdashiesAdapter: Mock-Mode AN ({reason})");
+            Logger.Info($"DashieAdapter: Mock-Mode AN ({reason})");
         }
         else if (!shouldRun && _mockCts != null)
         {
@@ -236,12 +236,12 @@ public sealed class IrdashiesAdapterService
             _mockCts = null;
             if (!_realConnected)
                 BroadcastFireAndForget(new { type = "runningState", data = false });
-            Logger.Info($"IrdashiesAdapter: Mock-Mode AUS ({reason})");
+            Logger.Info($"DashieAdapter: Mock-Mode AUS ({reason})");
         }
         else
         {
             // Bereits laufend, nur Modus-Wechsel — BuildMockTelemetry switcht automatisch.
-            Logger.Info($"IrdashiesAdapter: Mock-Mode Update ({reason})");
+            Logger.Info($"DashieAdapter: Mock-Mode Update ({reason})");
         }
     }
 
@@ -272,7 +272,7 @@ public sealed class IrdashiesAdapterService
         if (_mockBaseValues != null) return; // schon geladen
         try
         {
-            var asm = typeof(IrdashiesAdapterService).Assembly;
+            var asm = typeof(DashieAdapterService).Assembly;
 
             using (var telStream = asm.GetManifestResourceStream(MockTelemetryResource))
             {
@@ -289,12 +289,12 @@ public sealed class IrdashiesAdapterService
                         }
                     }
                     _mockBaseValues = dict;
-                    Logger.Info($"IrdashiesAdapter: Mock-Telemetrie geladen ({dict.Count} Vars).");
+                    Logger.Info($"DashieAdapter: Mock-Telemetrie geladen ({dict.Count} Vars).");
                 }
                 else
                 {
                     _mockBaseValues = new Dictionary<string, JsonElement>();
-                    Logger.Warn($"IrdashiesAdapter: Mock telemetry resource fehlt ({MockTelemetryResource}).");
+                    Logger.Warn($"DashieAdapter: Mock telemetry resource fehlt ({MockTelemetryResource}).");
                 }
             }
 
@@ -307,13 +307,13 @@ public sealed class IrdashiesAdapterService
                 }
                 else
                 {
-                    Logger.Warn($"IrdashiesAdapter: Mock session resource fehlt ({MockSessionResource}).");
+                    Logger.Warn($"DashieAdapter: Mock session resource fehlt ({MockSessionResource}).");
                 }
             }
         }
         catch (Exception ex)
         {
-            Logger.Warn($"IrdashiesAdapter: Mock-Daten laden fehlgeschlagen: {ex.Message}");
+            Logger.Warn($"DashieAdapter: Mock-Daten laden fehlgeschlagen: {ex.Message}");
             _mockBaseValues ??= new Dictionary<string, JsonElement>();
         }
     }
@@ -793,7 +793,7 @@ public sealed class IrdashiesAdapterService
                                 _lastLoggedPlayerCarId = carId;
                                 string name = d.TryGetProperty("CarScreenName", out var cn)
                                     ? cn.GetString() ?? "" : "";
-                                Logger.Info($"IrdashiesAdapter: player car — CarID={carId} \"{name}\"");
+                                Logger.Info($"DashieAdapter: player car — CarID={carId} \"{name}\"");
                             }
                             break;
                         }
@@ -804,7 +804,7 @@ public sealed class IrdashiesAdapterService
         }
         catch (Exception ex)
         {
-            Logger.Warn($"IrdashiesAdapter: Session-Serialisierung fehlgeschlagen: {ex.Message}");
+            Logger.Warn($"DashieAdapter: Session-Serialisierung fehlgeschlagen: {ex.Message}");
         }
     }
 
@@ -915,7 +915,7 @@ public sealed class IrdashiesAdapterService
             }
             catch (Exception ex)
             {
-                Logger.Warn($"IrdashiesAdapter: GetContext-Fehler: {ex.Message}");
+                Logger.Warn($"DashieAdapter: GetContext-Fehler: {ex.Message}");
                 continue;
             }
 
@@ -939,7 +939,7 @@ public sealed class IrdashiesAdapterService
         }
         catch (Exception ex)
         {
-            Logger.Warn($"IrdashiesAdapter: Verbindungsfehler: {ex.Message}");
+            Logger.Warn($"DashieAdapter: Verbindungsfehler: {ex.Message}");
             try { ctx.Response.Abort(); } catch { }
         }
     }
@@ -987,7 +987,7 @@ public sealed class IrdashiesAdapterService
         }
         catch (Exception ex)
         {
-            Logger.Warn($"IrdashiesAdapter: ServeHttp-Fehler: {ex.Message}");
+            Logger.Warn($"DashieAdapter: ServeHttp-Fehler: {ex.Message}");
             try { rsp.Abort(); } catch { }
         }
     }
@@ -1018,7 +1018,7 @@ public sealed class IrdashiesAdapterService
         var id = Guid.NewGuid();
         var client = new Client { Ws = ws };
         _clients[id] = client;
-        Logger.Info($"IrdashiesAdapter: WS-Client verbunden ({_clients.Count} aktiv)");
+        Logger.Info($"DashieAdapter: WS-Client verbunden ({_clients.Count} aktiv)");
 
         try
         {
@@ -1068,7 +1068,7 @@ public sealed class IrdashiesAdapterService
         finally
         {
             _clients.TryRemove(id, out _);
-            Logger.Info($"IrdashiesAdapter: WS-Client getrennt ({_clients.Count} aktiv)");
+            Logger.Info($"DashieAdapter: WS-Client getrennt ({_clients.Count} aktiv)");
         }
     }
 
@@ -1121,7 +1121,7 @@ public sealed class IrdashiesAdapterService
         }
         catch (Exception ex)
         {
-            Logger.Warn($"IrdashiesAdapter: Client-Message-Parsefehler: {ex.Message}");
+            Logger.Warn($"DashieAdapter: Client-Message-Parsefehler: {ex.Message}");
         }
     }
 

@@ -316,17 +316,6 @@ void main(uint2 tid : SV_DispatchThreadID)
                                     (int)syncRes, inputSynced));
                 }
                 m_lastSyncRes = syncRes;
-                // Pulse alle 900 Frames (~10s nach Holdoff), wenn Drive einmal lief.
-                // Zeigt ob xrSyncActions plötzlich != XR_SUCCESS wird (z.B. wenn
-                // iRacing den Focus verliert), placeModeOn im SHM richtig
-                // ankommt, und welche Hand-Indices der Layer sieht.
-                if (m_loggedFirstDrive && (m_frameCount % 900 == 0) && m_frameCount > 0) {
-                    FrameSlot tmp{};
-                    if (m_mapView) std::memcpy(&tmp, m_mapView, sizeof(tmp));
-                    Log(fmt::format("Place: pulse f={} syncRes={} placeModeOn={} modeLast={} hovH={} grbH={}\n",
-                                    m_frameCount, (int)m_lastSyncRes, tmp.placeModeOn,
-                                    m_placeModeOnLast ? 1 : 0, m_hoveredHand, m_grabHand));
-                }
 
                 if (inputSynced) {
                     if (!m_loggedFirstDrive) {

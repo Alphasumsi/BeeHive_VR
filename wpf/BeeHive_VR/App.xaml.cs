@@ -91,7 +91,7 @@ namespace BeeHiveVR
             KeybindManager.Instance.Load(); // Bindings aus settings.json + Resolver aktiv
 
             // irdashies-Adapter: HTTP + WebSocket auf einem Port (Häppchen 1: Skelett)
-            IrdashiesAdapterService.Instance.Start();
+            DashieAdapterService.Instance.Start();
 
             // Trading-Paints-Downloader (hooked an IRacingService.SessionInfoUpdated)
             TradingPaintsService.Instance.Start();
@@ -101,13 +101,13 @@ namespace BeeHiveVR
                 {
                     var r = TradingPaintsService.Instance.Cleanup(
                         SettingsStore.Current.TradingPaintsAutoCleanupDays);
-                    Logger.Info(
+                    TpLogger.Info(
                         $"TradingPaints startup-cleanup: {r.FilesDeleted} files / " +
                         $"{r.BytesDeleted / 1024} KB / {r.FoldersDeleted} folders / {r.Errors} errors");
                 }
                 catch (System.Exception ex)
                 {
-                    Logger.Warn($"TradingPaints startup-cleanup failed: {ex.Message}");
+                    TpLogger.Warn($"TradingPaints startup-cleanup failed: {ex.Message}");
                 }
             }
 
@@ -280,7 +280,7 @@ namespace BeeHiveVR
             // sauberen Atlas-Prozess anfängt (Single-Instance-Mutex würde sonst
             // greifen wenn ein Zombie aus der Vorsession noch lebt).
             ElectronAtlasService.Instance.Stop();
-            IrdashiesAdapterService.Instance.Stop();
+            DashieAdapterService.Instance.Stop();
             RawInputService.Instance.Stop();
             EngineLink.Instance.Stop();
             IRacingService.Instance.Stop();

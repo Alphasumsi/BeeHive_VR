@@ -69,7 +69,7 @@ public sealed class TradingPaintsService
 
         _loopTask = Task.Run(() => LoopAsync(_cts.Token));
 
-        Logger.Info("TradingPaints: service started");
+        TpLogger.Info("TradingPaints: service started");
     }
 
     public void Stop()
@@ -96,7 +96,7 @@ public sealed class TradingPaintsService
             _loopTask = null;
         }
 
-        Logger.Info("TradingPaints: service stopped");
+        TpLogger.Info("TradingPaints: service stopped");
     }
 
     /// <summary>Triggert die Driver-Verarbeitung manuell (z.B. nach Toggle on).</summary>
@@ -149,13 +149,13 @@ public sealed class TradingPaintsService
                 }
                 if (newDrivers.Count == 0) continue;
 
-                Logger.Info($"TradingPaints: processing {newDrivers.Count} new driver(s)");
+                TpLogger.Info($"TradingPaints: processing {newDrivers.Count} new driver(s)");
                 await ProcessDriversAsync(newDrivers, ct);
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
-                Logger.Warn($"TradingPaints: loop iteration failed: {ex.Message}");
+                TpLogger.Warn($"TradingPaints: loop iteration failed: {ex.Message}");
             }
         }
     }
@@ -174,7 +174,7 @@ public sealed class TradingPaintsService
         try { Directory.CreateDirectory(folder); }
         catch (Exception ex)
         {
-            Logger.Error($"TradingPaints: could not create paint folder '{folder}'", ex);
+            TpLogger.Error($"TradingPaints: could not create paint folder '{folder}'", ex);
             return;
         }
 
@@ -209,7 +209,7 @@ public sealed class TradingPaintsService
         }
         catch (Exception ex)
         {
-            Logger.Warn($"TradingPaints: fetch failed: {ex.Message}");
+            TpLogger.Warn($"TradingPaints: fetch failed: {ex.Message}");
             return;
         }
 
@@ -225,7 +225,7 @@ public sealed class TradingPaintsService
             try { Directory.CreateDirectory(carFolder); }
             catch (Exception ex)
             {
-                Logger.Warn($"TradingPaints: could not create '{carFolder}': {ex.Message}");
+                TpLogger.Warn($"TradingPaints: could not create '{carFolder}': {ex.Message}");
                 continue;
             }
 
@@ -251,7 +251,7 @@ public sealed class TradingPaintsService
 
             try
             {
-                Logger.Info($"TradingPaints: downloading {asset.FileURL}");
+                TpLogger.Info($"TradingPaints: downloading {asset.FileURL}");
                 await DownloadAsync(asset.FileURL, tmpPath, ct);
 
                 if (isBz2)
@@ -272,7 +272,7 @@ public sealed class TradingPaintsService
             catch (OperationCanceledException) { return; }
             catch (Exception ex)
             {
-                Logger.Warn($"TradingPaints: download failed for {asset.FileURL}: {ex.Message}");
+                TpLogger.Warn($"TradingPaints: download failed for {asset.FileURL}: {ex.Message}");
                 try { if (File.Exists(tmpPath)) File.Delete(tmpPath); } catch { }
             }
         }
@@ -290,14 +290,14 @@ public sealed class TradingPaintsService
                     if (d.UserID == uid)
                     {
                         sdk!.ReloadTextures(IRacingSdkEnum.ReloadTexturesMode.CarIdx, d.CarIdx);
-                        Logger.Info($"TradingPaints: reload textures for {d.UserName} (carIdx={d.CarIdx})");
+                        TpLogger.Info($"TradingPaints: reload textures for {d.UserName} (carIdx={d.CarIdx})");
                     }
                 }
             }
         }
         catch (Exception ex)
         {
-            Logger.Warn($"TradingPaints: ReloadTextures failed: {ex.Message}");
+            TpLogger.Warn($"TradingPaints: ReloadTextures failed: {ex.Message}");
         }
     }
 
@@ -321,12 +321,12 @@ public sealed class TradingPaintsService
         var root = ResolveFolder();
         if (!Directory.Exists(root))
         {
-            Logger.Info($"TradingPaints: cleanup skipped — folder does not exist ({root})");
+            TpLogger.Info($"TradingPaints: cleanup skipped — folder does not exist ({root})");
             return result;
         }
         if (olderThanDays <= 0)
         {
-            Logger.Warn($"TradingPaints: cleanup skipped — invalid age '{olderThanDays}' days");
+            TpLogger.Warn($"TradingPaints: cleanup skipped — invalid age '{olderThanDays}' days");
             return result;
         }
 
@@ -347,7 +347,7 @@ public sealed class TradingPaintsService
             catch (Exception ex)
             {
                 result.Errors++;
-                Logger.Warn($"TradingPaints: delete failed for '{file}': {ex.Message}");
+                TpLogger.Warn($"TradingPaints: delete failed for '{file}': {ex.Message}");
             }
         }
 
@@ -367,11 +367,11 @@ public sealed class TradingPaintsService
             catch (Exception ex)
             {
                 result.Errors++;
-                Logger.Warn($"TradingPaints: rmdir failed for '{dir}': {ex.Message}");
+                TpLogger.Warn($"TradingPaints: rmdir failed for '{dir}': {ex.Message}");
             }
         }
 
-        Logger.Info(
+        TpLogger.Info(
             $"TradingPaints: cleanup done (root='{root}', cutoff={cutoff:yyyy-MM-dd}) — " +
             $"{result.FilesDeleted} files / {result.BytesDeleted / 1024} KB / " +
             $"{result.FoldersDeleted} folders / {result.Errors} errors");

@@ -42,7 +42,7 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private bool _mockEnabled;
 
     partial void OnMockEnabledChanged(bool value)
-        => IrdashiesAdapterService.Instance.SetMockStatic(value);
+        => DashieAdapterService.Instance.SetMockStatic(value);
 
     /// <summary>Die Quellen-Collection, die der Editor gerade bearbeitet:
     /// Spotter-Set oder die Sources des SelectedLayout.</summary>
