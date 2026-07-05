@@ -233,21 +233,6 @@ void main(uint2 tid : SV_DispatchThreadID)
             if (!m_stallThreadStarted) {
                 m_stallThreadStarted = true;
                 StartStallWatchdog();
-                // Diagnose-Kill-Switch (30.6.2026): BEEHIVE_NO_COMPOSITE gesetzt →
-                // WGC-Capture + Compose komplett überspringen. App + Atlas +
-                // Watchdog laufen weiter, aber der Layer macht KEIN Per-Frame-
-                // VR-Compositing (keine Overlays). Testet, ob die Freezes vom
-                // GPU-/WGC-Compositing-Pfad in iRacings Prozess kommen.
-                m_noComposite = (std::getenv("BEEHIVE_NO_COMPOSITE") != nullptr);
-                if (m_noComposite)
-                    Log("KILL-SWITCH: BEEHIVE_NO_COMPOSITE gesetzt — WGC-Capture + Compose werden uebersprungen (Overlays aus, Layer+Watchdog laufen weiter)\n");
-                // Route A (1.7.2026): BEEHIVE_SECOND_DEVICE_COMPOSE gesetzt = Compose
-                // laeuft auf einem eigenen D3D11-Device statt auf iRacings geteiltem
-                // Immediate-Context (Freeze-Root-Cause-Fix). Default aus = alter
-                // Direct-Context-Pfad bleibt exakt wie vorher, unangetastet.
-                m_secondDeviceCompose = (std::getenv("BEEHIVE_SECOND_DEVICE_COMPOSE") != nullptr);
-                if (m_secondDeviceCompose)
-                    Log("ROUTE-A: BEEHIVE_SECOND_DEVICE_COMPOSE gesetzt — Compose laeuft auf eigenem D3D11-Device\n");
                 // C (3.7.2026): WGC-Capture-Rate deckeln. BEEHIVE_CAPTURE_HZ=<n> setzt die
                 // Ziel-Capture-Rate (Default 30 Hz). =0 schaltet den Throttle ab (jeder
                 // Frame gepullt = Alt-Verhalten, für A/B-Baseline). Adressiert die am 3.7.
@@ -291,10 +276,7 @@ void main(uint2 tid : SV_DispatchThreadID)
 
             // EnsureSetup is idempotent — it keeps trying every frame until
             // Electron has populated the FrameSlot and our swapchain is built.
-            // Kill-Switch (s.o.): m_noComposite überspringt den gesamten WGC-/
-            // Compose-Block (kein EnsureSetup → keine WGC-Session/Swapchain), der
-            // Frame wird unten unverändert weitergereicht (VR läuft, ohne Overlays).
-            if (!m_noComposite && EnsureSetup()) {
+            if (EnsureSetup()) {
                 // 17.6.2026 — Atlas-Restart-Re-Attach. Beim Neustart der App während
                 // iRacing läuft erzeugt der neue Atlas-Prozess ein neues BrowserWindow
                 // (neues hwnd + producerPid). Ohne Re-Attach captured WGC weiter das
@@ -319,15 +301,8 @@ void main(uint2 tid : SV_DispatchThreadID)
                         SetXefPhase(XefPhase::ReAttach);
                         m_captureWindow.reset();
                         try {
-                            // Route A: WGC muss auf demselben Device wie der aktive
-                            // Compose-Pfad capturen — sonst wäre GetCurrentTexture()'s
-                            // Surface auf dem falschen Device für den Rest der Pipeline.
-                            ID3D11Device* captureDevice =
-                                (m_secondDeviceCompose && m_composeDevice)
-                                    ? static_cast<ID3D11Device*>(m_composeDevice.Get())
-                                    : m_appDevice;
                             m_captureWindow =
-                                std::make_unique<capture::CaptureWindowWinRT>(captureDevice, newHwnd);
+                                std::make_unique<capture::CaptureWindowWinRT>(m_appDevice, newHwnd);
                             m_captureWindow->setMinPullIntervalNs(m_captureMinPullNs);  // C
                             m_capturedHwnd = newHwnd;
                             m_capturedPid  = a.producerPid;
@@ -566,14 +541,6 @@ void main(uint2 tid : SV_DispatchThreadID)
         // to 96 for headroom (future opacity / source-id / flag fields).
         static constexpr size_t kPlaceOutSize = 96;
 
-        // Route A: kurzer, fester Timeout für den Producer-seitigen
-        // AcquireSync auf der Shared-Texture — NIEMALS INFINITE. Läuft auf
-        // demselben Thread wie xrEndFrame; ein blockierender Wait hier würde
-        // (indirekt, über den Consumer-Release auf iRacings Device) genau das
-        // Stall-Risiko zurückbringen, das Route A beseitigen soll. Bei Timeout
-        // wird der Frame einfach nicht neu produziert.
-        static constexpr DWORD kComposeProducerTimeoutMs = 2;
-
         // ---------- Setup ------------------------------------------------------
         // Idempotent: every xrEndFrame calls this until everything is ready.
         // Returns true once swapchain + space + first cached texture are in.
@@ -595,16 +562,6 @@ void main(uint2 tid : SV_DispatchThreadID)
                     m_loggedHoldoff = true;
                 }
                 return false;
-            }
-
-            // Route A: eigenes Device MUSS vor der WGC-Capture-Erzeugung (Schritt c
-            // unten) stehen, weil CaptureWindowWinRT das Device beim Konstruieren
-            // fest verdrahtet. Bei Fehlschlag automatischer Fallback auf den alten
-            // Pfad (m_secondDeviceCompose zurückgesetzt) — Overlays bleiben so in
-            // jedem Fall funktionsfähig, nur ohne die Freeze-Entkopplung.
-            if (m_secondDeviceCompose && !m_composeDevice && !EnsureComposeDevice()) {
-                Log("compose-device: Erzeugung fehlgeschlagen — Fallback auf alten Compose-Pfad\n");
-                m_secondDeviceCompose = false;
             }
 
             // (a) Open the shared-memory section Electron created. Keep it mapped
@@ -649,12 +606,8 @@ void main(uint2 tid : SV_DispatchThreadID)
                 m_capturedHwnd = (HWND)(uintptr_t)slot.hwnd;
                 m_capturedPid  = slot.producerPid;
                 try {
-                    ID3D11Device* captureDevice =
-                        (m_secondDeviceCompose && m_composeDevice)
-                            ? static_cast<ID3D11Device*>(m_composeDevice.Get())
-                            : m_appDevice;
                     m_captureWindow =
-                        std::make_unique<capture::CaptureWindowWinRT>(captureDevice, m_capturedHwnd);
+                        std::make_unique<capture::CaptureWindowWinRT>(m_appDevice, m_capturedHwnd);
                     m_captureWindow->setMinPullIntervalNs(m_captureMinPullNs);  // C
                 } catch (const winrt::hresult_error& e) {
                     Log(fmt::format("setup: CaptureWindowWinRT ctor failed hr=0x{:08x} ({})\n",
@@ -741,179 +694,8 @@ void main(uint2 tid : SV_DispatchThreadID)
             // (g) Chroma-Key Compute-Pipeline bauen. Fehler hier sind nicht fatal —
             //     m_chromaReady=false fällt im Per-Frame-Path zurück auf CopyResource
             //     (alte Pipeline, kein Chroma-Key, dafür sicher passierbarer Magenta-bg).
-            //
-            // Route A: bei aktivem Kill-Switch läuft die komplette Pipeline auf
-            // m_composeDevice statt m_appDevice (SetupComposePipeline). Kein
-            // automatischer Fallback mehr an dieser Stelle — die WGC-Capture wurde
-            // oben (Schritt c) bereits an m_composeDevice gebunden, ein Rückfall auf
-            // den alten Pfad würde ein Cross-Device-CopyResource erzwingen. Bei
-            // Fehlschlag bleibt m_composeReady=false → RenderComposeSecondDevice()
-            // composed einfach nichts diesen Frame (kein Crash, kein Overlay).
-            if (m_secondDeviceCompose && m_composeDevice) {
-                SetupComposePipeline();
-            } else {
-                SetupChromaPipeline();
-            }
+            SetupChromaPipeline();
             return true;
-        }
-
-        // ---------- Route A: Compose auf eigenem D3D11-Device (1.7.2026) -------
-        // Grund: der komplette Per-Frame-Compose lief bisher auf iRacings
-        // geteiltem Immediate-Context (m_appContext) — unsere GPU-Arbeit
-        // serialisiert dort mit iRacings eigenem Render → mehrsekündige Freezes
-        // (bestätigt per Kill-Switch-A/B, s. stalls.log). Fix: eigenes, zweites
-        // D3D11-Device auf demselben Adapter, eigene GPU-Kommando-Queue, kein
-        // gemeinsamer Command-Stream mehr mit iRacing.
-
-        // Einmalig, idempotent. Shared-Resources zwischen zwei Devices brauchen
-        // nur Adapter-Gleichheit, keine Feature-Level-Übereinstimmung.
-        // BGRA_SUPPORT ist Pflicht für den WinRT/WGC-Interop-Pfad
-        // (CreateDirect3D11DeviceFromDXGIDevice schlägt sonst fehl).
-        bool EnsureComposeDevice() {
-            if (m_composeDevice) return true;
-            ComPtr<IDXGIDevice> dxgiDevice;
-            HRESULT hr = m_appDevice->QueryInterface(IID_PPV_ARGS(&dxgiDevice));
-            if (FAILED(hr)) {
-                Log(fmt::format("compose-device: QueryInterface(IDXGIDevice) failed hr=0x{:08x}\n", (uint32_t)hr));
-                return false;
-            }
-            ComPtr<IDXGIAdapter> adapter;
-            hr = dxgiDevice->GetAdapter(&adapter);
-            if (FAILED(hr)) {
-                Log(fmt::format("compose-device: GetAdapter failed hr=0x{:08x}\n", (uint32_t)hr));
-                return false;
-            }
-            const D3D_FEATURE_LEVEL featureLevels[] = {
-                D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0,
-            };
-            hr = D3D11CreateDevice(
-                adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr,
-                D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                featureLevels, (UINT)std::size(featureLevels), D3D11_SDK_VERSION,
-                &m_composeDevice, nullptr, &m_composeContext);
-            if (FAILED(hr)) {
-                Log(fmt::format("compose-device: D3D11CreateDevice failed hr=0x{:08x}\n", (uint32_t)hr));
-                return false;
-            }
-            Log("compose-device: eigenes D3D11-Device erzeugt (Route A, gleicher Adapter)\n");
-            return true;
-        }
-
-        // Shared-Texture (Keyed-Mutex) zwischen m_composeDevice (Producer) und
-        // m_appDevice (Consumer). Same-process + gleicher Adapter → klassischer
-        // GetSharedHandle/OpenSharedResource-Pfad reicht (kein NT-Handle nötig,
-        // der wäre nur für Cross-Process/Cross-Adapter-Robustheit relevant).
-        bool SetupSharedTexture() {
-            D3D11_TEXTURE2D_DESC td{};
-            td.Width            = m_texWidth;
-            td.Height           = m_texHeight;
-            td.MipLevels        = 1;
-            td.ArraySize        = 1;
-            td.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
-            td.SampleDesc.Count = 1;
-            td.Usage            = D3D11_USAGE_DEFAULT;
-            td.BindFlags        = D3D11_BIND_SHADER_RESOURCE;   // nur CopyResource-Ziel/-Quelle, Flag hier nur zur Treiber-Kompatibilität
-            td.MiscFlags        = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
-            HRESULT hr = m_composeDevice->CreateTexture2D(&td, nullptr, &m_sharedTex);
-            if (FAILED(hr)) {
-                Log(fmt::format("compose: CreateTexture2D (shared) failed hr=0x{:08x}\n", (uint32_t)hr));
-                return false;
-            }
-            ComPtr<IDXGIResource> res;
-            hr = m_sharedTex.As(&res);
-            if (FAILED(hr)) {
-                Log(fmt::format("compose: QueryInterface(IDXGIResource) failed hr=0x{:08x}\n", (uint32_t)hr));
-                return false;
-            }
-            HANDLE hShared = nullptr;
-            hr = res->GetSharedHandle(&hShared);
-            if (FAILED(hr) || !hShared) {
-                Log(fmt::format("compose: GetSharedHandle failed hr=0x{:08x}\n", (uint32_t)hr));
-                return false;
-            }
-            hr = m_sharedTex.As(&m_sharedTexProducerMutex);
-            if (FAILED(hr)) {
-                Log(fmt::format("compose: QueryInterface(IDXGIKeyedMutex) producer failed hr=0x{:08x}\n", (uint32_t)hr));
-                return false;
-            }
-
-            hr = m_appDevice->OpenSharedResource(hShared, IID_PPV_ARGS(&m_sharedTexOnAppDevice));
-            if (FAILED(hr)) {
-                Log(fmt::format("compose: OpenSharedResource (app device) failed hr=0x{:08x}\n", (uint32_t)hr));
-                return false;
-            }
-            hr = m_sharedTexOnAppDevice.As(&m_sharedTexConsumerMutex);
-            if (FAILED(hr)) {
-                Log(fmt::format("compose: QueryInterface(IDXGIKeyedMutex) consumer failed hr=0x{:08x}\n", (uint32_t)hr));
-                return false;
-            }
-            Log("compose: Shared-Texture + Keyed-Mutex zwischen Compose- und App-Device aufgesetzt\n");
-            return true;
-        }
-
-        // Analog zu SetupChromaPipeline, aber komplett auf m_composeDevice/
-        // m_composeContext — kein Bezug zu m_appDevice bis auf die
-        // Shared-Texture am Ende (SetupSharedTexture).
-        void SetupComposePipeline() {
-            ComPtr<ID3DBlob> shaderBlob, errorBlob;
-            HRESULT hr = D3DCompile(
-                kChromaKeyHlsl, std::strlen(kChromaKeyHlsl),
-                "chroma_key.hlsl", nullptr, nullptr,
-                "main", "cs_5_0",
-                D3DCOMPILE_OPTIMIZATION_LEVEL3, 0,
-                &shaderBlob, &errorBlob);
-            if (FAILED(hr)) {
-                const char* msg = errorBlob ? (const char*)errorBlob->GetBufferPointer() : "(no error blob)";
-                Log(fmt::format("compose: D3DCompile failed hr=0x{:08x}: {}\n", (uint32_t)hr, msg));
-                return;
-            }
-            hr = m_composeDevice->CreateComputeShader(
-                shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(),
-                nullptr, &m_composeShader);
-            if (FAILED(hr)) {
-                Log(fmt::format("compose: CreateComputeShader failed hr=0x{:08x}\n", (uint32_t)hr));
-                return;
-            }
-
-            D3D11_BUFFER_DESC cbd{};
-            cbd.ByteWidth      = sizeof(ChromaConstants);
-            cbd.Usage          = D3D11_USAGE_DYNAMIC;
-            cbd.BindFlags      = D3D11_BIND_CONSTANT_BUFFER;
-            cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-            hr = m_composeDevice->CreateBuffer(&cbd, nullptr, &m_composeCB);
-            if (FAILED(hr)) {
-                Log(fmt::format("compose: CreateBuffer (CB) failed hr=0x{:08x}\n", (uint32_t)hr));
-                return;
-            }
-
-            D3D11_TEXTURE2D_DESC td{};
-            td.Width            = m_texWidth;
-            td.Height           = m_texHeight;
-            td.MipLevels        = 1;
-            td.ArraySize        = 1;
-            td.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
-            td.SampleDesc.Count = 1;
-            td.Usage            = D3D11_USAGE_DEFAULT;
-            td.BindFlags        = D3D11_BIND_UNORDERED_ACCESS;
-            hr = m_composeDevice->CreateTexture2D(&td, nullptr, &m_composeIntermediateTex);
-            if (FAILED(hr)) {
-                Log(fmt::format("compose: CreateTexture2D (intermediate) failed hr=0x{:08x}\n", (uint32_t)hr));
-                return;
-            }
-            D3D11_UNORDERED_ACCESS_VIEW_DESC uavd{};
-            uavd.Format        = DXGI_FORMAT_R8G8B8A8_UNORM;
-            uavd.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-            hr = m_composeDevice->CreateUnorderedAccessView(m_composeIntermediateTex.Get(), &uavd, &m_composeIntermediateUAV);
-            if (FAILED(hr)) {
-                Log(fmt::format("compose: CreateUnorderedAccessView failed hr=0x{:08x}\n", (uint32_t)hr));
-                return;
-            }
-
-            if (!SetupSharedTexture()) return;
-
-            m_composeReady = true;
-            Log(fmt::format("compose: Route-A-Pipeline bereit ({}x{}, zweites Device)\n",
-                            m_texWidth, m_texHeight));
         }
 
         // C4: Compute-Shader + Intermediate-UAV-Textur einmalig bauen.
@@ -1026,16 +808,6 @@ void main(uint2 tid : SV_DispatchThreadID)
                 reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
             for (auto& img : images) m_swapchainTextures.push_back(img.texture);
 
-            // Route A: bei aktivem Kill-Switch läuft die Intermediate-Textur (+
-            // Shared-Texture) auf m_composeDevice statt m_appDevice — eigener
-            // Rebuild-Pfad, sonst identische Logik zum alten Pfad unten.
-            if (m_secondDeviceCompose && m_composeDevice) {
-                if (!RebuildComposePipelineForNewSize()) return false;
-                Log(fmt::format("resize: swapchain + Route-A-Compose rebuilt {}x{}\n",
-                                m_texWidth, m_texHeight));
-                return true;
-            }
-
             // Intermediate-Tex an die neue Größe anpassen. Shader+CB sind
             // size-unabhängig und bleiben drin. UAV wird durch Reset() der Tex
             // auch nichtig (UAV hält Tex am Leben, nicht umgekehrt) — neu bauen.
@@ -1074,50 +846,6 @@ void main(uint2 tid : SV_DispatchThreadID)
 
             Log(fmt::format("resize: swapchain + intermediate rebuilt {}x{}\n",
                             m_texWidth, m_texHeight));
-            return true;
-        }
-
-        // Route A: Compose-Intermediate + Shared-Texture an neue Größe
-        // anpassen. Shader+CB sind size-unabhängig (analog zur alten Pipeline)
-        // und bleiben drin.
-        bool RebuildComposePipelineForNewSize() {
-            m_composeIntermediateTex.Reset();
-            m_composeIntermediateUAV.Reset();
-            m_sharedTex.Reset();
-            m_sharedTexProducerMutex.Reset();
-            m_sharedTexOnAppDevice.Reset();
-            m_sharedTexConsumerMutex.Reset();
-
-            D3D11_TEXTURE2D_DESC td{};
-            td.Width            = m_texWidth;
-            td.Height           = m_texHeight;
-            td.MipLevels        = 1;
-            td.ArraySize        = 1;
-            td.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
-            td.SampleDesc.Count = 1;
-            td.Usage            = D3D11_USAGE_DEFAULT;
-            td.BindFlags        = D3D11_BIND_UNORDERED_ACCESS;
-            HRESULT hr = m_composeDevice->CreateTexture2D(&td, nullptr, &m_composeIntermediateTex);
-            if (FAILED(hr)) {
-                Log(fmt::format("compose-resize: CreateTexture2D failed hr=0x{:08x}\n", (uint32_t)hr));
-                m_composeReady = false;
-                return false;
-            }
-            D3D11_UNORDERED_ACCESS_VIEW_DESC uavd{};
-            uavd.Format        = DXGI_FORMAT_R8G8B8A8_UNORM;
-            uavd.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-            hr = m_composeDevice->CreateUnorderedAccessView(m_composeIntermediateTex.Get(), &uavd, &m_composeIntermediateUAV);
-            if (FAILED(hr)) {
-                Log(fmt::format("compose-resize: CreateUnorderedAccessView failed hr=0x{:08x}\n", (uint32_t)hr));
-                m_composeReady = false;
-                return false;
-            }
-            if (!SetupSharedTexture()) {
-                m_composeReady = false;
-                return false;
-            }
-            m_composeSourceSRV.Reset();
-            m_composeSourceCachedPtr = nullptr;
             return true;
         }
 
@@ -1197,24 +925,6 @@ void main(uint2 tid : SV_DispatchThreadID)
             m_chromaSourceCachedPtr = nullptr;
             m_chromaReady = false;
             m_loggedChromaError = false;
-            // Route A: Pipeline-/Shared-Tex-ComPtrs zurücksetzen wie die alte
-            // Chroma-Pipeline. m_composeDevice/m_composeContext selbst NICHT
-            // resetten — die bleiben über Session-Grenzen hinweg gültig (teuer
-            // neu zu erzeugen, unabhängig von iRacings Session-Lifecycle). Bei
-            // neuer Session wird die Shared-Texture einfach neu gegen den dann
-            // aktuellen m_appDevice geöffnet (SetupSharedTexture in EnsureSetup).
-            m_composeShader.Reset();
-            m_composeCB.Reset();
-            m_composeIntermediateTex.Reset();
-            m_composeIntermediateUAV.Reset();
-            m_composeSourceSRV.Reset();
-            m_composeSourceCachedPtr = nullptr;
-            m_sharedTex.Reset();
-            m_sharedTexProducerMutex.Reset();
-            m_sharedTexOnAppDevice.Reset();
-            m_sharedTexConsumerMutex.Reset();
-            m_composeReady = false;
-            m_loggedComposeError = false;
         }
 
         // ---------- Place-in-VR ------------------------------------------------
@@ -1853,14 +1563,7 @@ void main(uint2 tid : SV_DispatchThreadID)
 
             ID3D11Texture2D* dst = m_swapchainTextures[imageIndex];
 
-            if (m_secondDeviceCompose && m_composeDevice) {
-                // Route A: sourceTex liegt auf m_composeDevice (WGC wurde dorthin
-                // umgezogen, s. EnsureSetup) — ein direktes CopyResource(dst,
-                // sourceTex) wäre hier cross-device und in D3D11 nicht erlaubt.
-                // Kompletter Compose-Durchlauf inkl. Cross-Device-Handoff steckt
-                // in RenderComposeSecondDevice().
-                RenderComposeSecondDevice(sourceTex, dst, frame, slots, requested);
-            } else if (m_chromaReady) {
+            if (m_chromaReady) {
                 // C4 Chroma-Key + B10 Opacity: pro sichtbarem Quad ein Dispatch
                 // über seinen Sub-Rect ins Intermediate, danach einmal Copy ins
                 // SRGB-Swapchain-Image. Source-SRV nach Pointer cachen (WGC
@@ -2057,142 +1760,6 @@ void main(uint2 tid : SV_DispatchThreadID)
                 }
             }
             return written;
-        }
-
-        // Route A: kompletter Compose-Durchlauf auf m_composeDevice/
-        // m_composeContext + Shared-Texture-Handoff auf iRacings Device. Nur
-        // gerufen wenn m_secondDeviceCompose aktiv ist. Bei jedem Timeout/Fehler
-        // wird dst NICHT angefasst — Swapchain-Image behält seinen
-        // Rotationsinhalt (bounded staleness über max. Swapchain-Image-Anzahl
-        // Frames, kein Crash, kein Block). Spiegelt den Chroma-Dispatch-Loop aus
-        // RenderAtlasQuads 1:1, nur auf m_composeContext/m_compose*-Resources —
-        // bewusst dupliziert statt den alten, bewährten Pfad umzubauen (der
-        // bleibt bei ausgeschaltetem Kill-Switch komplett unangetastet).
-        void RenderComposeSecondDevice(ID3D11Texture2D* sourceTex, ID3D11Texture2D* dst,
-                                        const FrameSlot& frame,
-                                        const std::array<QuadSlot, kMaxQuads>& slots,
-                                        uint32_t requested) {
-            if (!m_composeReady) return;   // Setup fehlgeschlagen — kein Compose diesen Frame
-
-            if (sourceTex != m_composeSourceCachedPtr) {
-                m_composeSourceSRV.Reset();
-                D3D11_SHADER_RESOURCE_VIEW_DESC srvd{};
-                srvd.Format              = DXGI_FORMAT_R8G8B8A8_UNORM;
-                srvd.ViewDimension       = D3D11_SRV_DIMENSION_TEXTURE2D;
-                srvd.Texture2D.MipLevels = 1;
-                const HRESULT hrSrv = m_composeDevice->CreateShaderResourceView(
-                    sourceTex, &srvd, &m_composeSourceSRV);
-                if (FAILED(hrSrv)) {
-                    if (!m_loggedComposeError) {
-                        Log(fmt::format("compose: CreateShaderResourceView (WGC src) hr=0x{:08x}\n",
-                                        (uint32_t)hrSrv));
-                        m_loggedComposeError = true;
-                    }
-                    return;   // dst bleibt unangetastet
-                }
-                m_composeSourceCachedPtr = sourceTex;
-            }
-
-            ID3D11ShaderResourceView* srvs[] = { m_composeSourceSRV.Get() };
-            ID3D11UnorderedAccessView* uavs[] = { m_composeIntermediateUAV.Get() };
-            ID3D11Buffer* cbs[] = { m_composeCB.Get() };
-            m_composeContext->CSSetShader(m_composeShader.Get(), nullptr, 0);
-            m_composeContext->CSSetShaderResources(0, 1, srvs);
-            m_composeContext->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-            m_composeContext->CSSetConstantBuffers(0, 1, cbs);
-
-            for (uint32_t i = 0; i < requested; ++i) {
-                const QuadSlot& s = slots[i];
-                if (!s.visible) continue;
-                if (!QuadRectFitsAtlas(s)) continue;
-
-                D3D11_MAPPED_SUBRESOURCE mapped{};
-                if (FAILED(m_composeContext->Map(m_composeCB.Get(), 0,
-                                                  D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-                    continue;
-                }
-                ChromaConstants* cb = (ChromaConstants*)mapped.pData;
-                cb->transparentColor[0] = 1.0f;
-                cb->transparentColor[1] = 0.0f;
-                cb->transparentColor[2] = 1.0f;
-                cb->opacity        = s.opacity;
-                cb->rectX          = s.rectX;
-                cb->rectY          = s.rectY;
-                cb->rectW          = s.rectW;
-                cb->rectH          = s.rectH;
-                const bool isGrabbed = m_grabHand != -1
-                    && std::memcmp(s.id, m_grabTargetId, 16) == 0;
-                const bool isHovered = !isGrabbed && m_hoveredHand != -1
-                    && std::memcmp(s.id, m_hoveredId, 16) == 0;
-                const bool isPlaceModeOn = frame.placeModeOn != 0;
-                if (isGrabbed) {
-                    cb->highlightOn = 1.0f;
-                    cb->borderPx    = 3.0f;
-                    cb->highlightColor[0] = 0.0f;
-                    cb->highlightColor[1] = 1.0f;
-                    cb->highlightColor[2] = 1.0f;
-                } else if (isHovered) {
-                    cb->highlightOn = 1.0f;
-                    cb->borderPx    = 2.0f;
-                    cb->highlightColor[0] = 1.0f;
-                    cb->highlightColor[1] = 1.0f;
-                    cb->highlightColor[2] = 1.0f;
-                } else if (isPlaceModeOn) {
-                    cb->highlightOn = 1.0f;
-                    cb->borderPx    = 1.0f;
-                    cb->highlightColor[0] = 0.0f;
-                    cb->highlightColor[1] = 0.55f;
-                    cb->highlightColor[2] = 0.0f;
-                } else {
-                    cb->highlightOn = 0.0f;
-                    cb->borderPx    = 0.0f;
-                    cb->highlightColor[0] = 0.0f;
-                    cb->highlightColor[1] = 0.0f;
-                    cb->highlightColor[2] = 0.0f;
-                }
-                cb->pad0     = 0.0f;
-                cb->padAlign = 0.0f;
-                cb->pad1     = 0.0f;
-                m_composeContext->Unmap(m_composeCB.Get(), 0);
-
-                m_composeContext->Dispatch((s.rectW + 7) / 8, (s.rectH + 7) / 8, 1);
-            }
-
-            ID3D11ShaderResourceView* nullSRV[] = { nullptr };
-            ID3D11UnorderedAccessView* nullUAV[] = { nullptr };
-            m_composeContext->CSSetShaderResources(0, 1, nullSRV);
-            m_composeContext->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
-            m_composeContext->CSSetShader(nullptr, nullptr, 0);
-
-            // Producer-Handoff (auf m_composeContext, unser eigenes Device):
-            // kurzer, fester Timeout (kComposeProducerTimeoutMs) — NIEMALS
-            // INFINITE. Bei Timeout: dieser Frame wird nicht neu produziert,
-            // die Shared-Texture behält ihren alten Inhalt.
-            if (SUCCEEDED(m_sharedTexProducerMutex->AcquireSync(0, kComposeProducerTimeoutMs))) {
-                m_composeContext->CopyResource(m_sharedTex.Get(), m_composeIntermediateTex.Get());
-                m_sharedTexProducerMutex->ReleaseSync(1);
-            } else {
-                ++m_composeProducerTimeouts;
-                return;
-            }
-
-            // Consumer-Handoff auf iRacings Device (m_appContext) — Timeout=0 ist
-            // KRITISCH: jeder andere Wert reproduziert das ursprüngliche
-            // Stall-Risiko nur eine Ebene tiefer (s. Plan). Bei Timeout: dst
-            // bleibt unangetastet, Swapchain-Image behält Rotationsinhalt.
-            if (m_sharedTexConsumerMutex->AcquireSync(1, 0) == S_OK) {
-                m_appContext->CopyResource(dst, m_sharedTexOnAppDevice.Get());
-                m_sharedTexConsumerMutex->ReleaseSync(0);
-            } else {
-                ++m_composeConsumerTimeouts;
-            }
-
-            // Diagnose (Verify-Instrument): Skip-Rate periodisch loggen, bevor
-            // der Pfad zum Default wird (s. Plan Punkt 7).
-            if (m_frameCount % 900 == 0) {
-                Log(fmt::format("compose: pulse f={} producerTimeouts={} consumerTimeouts={}\n",
-                                m_frameCount, m_composeProducerTimeouts, m_composeConsumerTimeouts));
-            }
         }
 
         // ===== Stall-Watchdog (25.6.2026) ===================================
@@ -2428,7 +1995,6 @@ void main(uint2 tid : SV_DispatchThreadID)
         std::thread           m_stallThread;
         std::atomic<bool>     m_stallThreadStop{false};
         bool                  m_stallThreadStarted{false};
-        bool                  m_noComposite{false};   // Kill-Switch BEEHIVE_NO_COMPOSITE
         int64_t               m_captureMinPullNs{0};  // C: WGC-Capture-Throttle (BEEHIVE_CAPTURE_HZ), 0=aus
         XrSwapchain m_swapchain{XR_NULL_HANDLE};
         std::vector<ID3D11Texture2D*> m_swapchainTextures; // runtime-owned
@@ -2452,30 +2018,6 @@ void main(uint2 tid : SV_DispatchThreadID)
         ID3D11Texture2D*                   m_chromaSourceCachedPtr{nullptr};
         bool                               m_chromaReady{false};
         bool                               m_loggedChromaError{false};
-
-        // ---------------------------------------------------------------
-        // Route A (1.7.2026) — Compose auf eigenem D3D11-Device. Kill-Switch
-        // BEEHIVE_SECOND_DEVICE_COMPOSE (Default aus) — bei aus bleiben alle
-        // m_chroma*/m_appContext-Felder oben die einzig aktiven, dieser Block
-        // bleibt komplett ungenutzt.
-        bool m_secondDeviceCompose{false};
-        ComPtr<ID3D11Device>        m_composeDevice;
-        ComPtr<ID3D11DeviceContext> m_composeContext;
-        ComPtr<ID3D11ComputeShader>        m_composeShader;
-        ComPtr<ID3D11Buffer>               m_composeCB;
-        ComPtr<ID3D11Texture2D>            m_composeIntermediateTex;   // UAV-Ziel auf m_composeDevice
-        ComPtr<ID3D11UnorderedAccessView>  m_composeIntermediateUAV;
-        ComPtr<ID3D11ShaderResourceView>   m_composeSourceSRV;         // WGC-Source-SRV, auf m_composeDevice
-        ID3D11Texture2D*                   m_composeSourceCachedPtr{nullptr};
-        // Shared-Texture zwischen den zwei Devices (Keyed-Mutex).
-        ComPtr<ID3D11Texture2D>      m_sharedTex;              // Producer-Handle, auf m_composeDevice
-        ComPtr<IDXGIKeyedMutex>      m_sharedTexProducerMutex;
-        ComPtr<ID3D11Texture2D>      m_sharedTexOnAppDevice;   // Consumer-Handle, auf m_appDevice
-        ComPtr<IDXGIKeyedMutex>      m_sharedTexConsumerMutex;
-        bool     m_composeReady{false};
-        bool     m_loggedComposeError{false};
-        uint64_t m_composeConsumerTimeouts{0};   // Diagnose: Skip-Rate vor Default-Umstellung prüfen
-        uint64_t m_composeProducerTimeouts{0};
     };
 
     OpenXrApi* GetInstance() {
