@@ -248,6 +248,18 @@ void main(uint2 tid : SV_DispatchThreadID)
                 m_secondDeviceCompose = (std::getenv("BEEHIVE_SECOND_DEVICE_COMPOSE") != nullptr);
                 if (m_secondDeviceCompose)
                     Log("ROUTE-A: BEEHIVE_SECOND_DEVICE_COMPOSE gesetzt — Compose laeuft auf eigenem D3D11-Device\n");
+                // C (3.7.2026): WGC-Capture-Rate deckeln. BEEHIVE_CAPTURE_HZ=<n> setzt die
+                // Ziel-Capture-Rate (Default 30 Hz). =0 schaltet den Throttle ab (jeder
+                // Frame gepullt = Alt-Verhalten, für A/B-Baseline). Adressiert die am 3.7.
+                // per XRFrameTools gemessene Ursache: WGC-Capture stallt in iRacings
+                // GPU-Leerlauf-Lücken bei leichter Last. Quad-Pose bleibt voll-rate.
+                {
+                    int captureHz = 30;   // Default: Throttle an
+                    if (const char* e = std::getenv("BEEHIVE_CAPTURE_HZ")) captureHz = std::atoi(e);
+                    m_captureMinPullNs = (captureHz > 0) ? (1000000000LL / captureHz) : 0;
+                    Log(fmt::format("C: WGC-Capture-Throttle = {} Hz (minPull={} ns; 0=aus)\n",
+                                    captureHz, m_captureMinPullNs));
+                }
             }
             m_xefEntryFrame.store(m_frameCount, std::memory_order_relaxed);
             m_xefEntryNs.store(NowSteadyNs(), std::memory_order_relaxed);
@@ -316,6 +328,7 @@ void main(uint2 tid : SV_DispatchThreadID)
                                     : m_appDevice;
                             m_captureWindow =
                                 std::make_unique<capture::CaptureWindowWinRT>(captureDevice, newHwnd);
+                            m_captureWindow->setMinPullIntervalNs(m_captureMinPullNs);  // C
                             m_capturedHwnd = newHwnd;
                             m_capturedPid  = a.producerPid;
                         } catch (const winrt::hresult_error& e) {
@@ -642,6 +655,7 @@ void main(uint2 tid : SV_DispatchThreadID)
                             : m_appDevice;
                     m_captureWindow =
                         std::make_unique<capture::CaptureWindowWinRT>(captureDevice, m_capturedHwnd);
+                    m_captureWindow->setMinPullIntervalNs(m_captureMinPullNs);  // C
                 } catch (const winrt::hresult_error& e) {
                     Log(fmt::format("setup: CaptureWindowWinRT ctor failed hr=0x{:08x} ({})\n",
                                     (uint32_t)e.code().value,
@@ -2415,6 +2429,7 @@ void main(uint2 tid : SV_DispatchThreadID)
         std::atomic<bool>     m_stallThreadStop{false};
         bool                  m_stallThreadStarted{false};
         bool                  m_noComposite{false};   // Kill-Switch BEEHIVE_NO_COMPOSITE
+        int64_t               m_captureMinPullNs{0};  // C: WGC-Capture-Throttle (BEEHIVE_CAPTURE_HZ), 0=aus
         XrSwapchain m_swapchain{XR_NULL_HANDLE};
         std::vector<ID3D11Texture2D*> m_swapchainTextures; // runtime-owned
 

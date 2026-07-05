@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <chrono>
+
 namespace openxr_api_layer::capture {
 
     namespace {
@@ -28,6 +30,10 @@ namespace openxr_api_layer::capture {
         virtual ~ICaptureWindow() = default;
 
         virtual ID3D11Texture2D* getSurface() = 0;
+
+        // C (3.7.2026): minimaler Abstand zwischen WGC-Frame-Pulls in Nanosekunden.
+        // 0 = jeder getSurface()-Aufruf pullt (Alt-Verhalten). >0 = Capture-Rate gedeckelt.
+        virtual void setMinPullIntervalNs(int64_t ns) = 0;
     };
 
     struct CaptureWindowWinRT : ICaptureWindow {
@@ -62,10 +68,14 @@ namespace openxr_api_layer::capture {
             m_framePool.Close();
         }
 
+        void setMinPullIntervalNs(int64_t ns) override { m_minPullIntervalNs = ns; }
+
         ID3D11Texture2D* getSurface() override {
             // Window-Resize-Detection: GraphicsCaptureItem.Size aktualisiert sich live mit dem
             // Fenster. Wenn das Item größer/kleiner geworden ist, FramePool mit neuer Größe
             // recreate'n — sonst captured WGC weiter in der alten Auflösung (Cropping).
+            // Läuft JEDEN Aufruf (auch wenn wir gleich den Pull drosseln) damit ein Resize
+            // sofort erkannt wird.
             const auto currentSize = m_item.Size();
             if (currentSize.Width != m_lastSize.Width || currentSize.Height != m_lastSize.Height) {
                 if (currentSize.Width > 0 && currentSize.Height > 0) {
@@ -80,15 +90,33 @@ namespace openxr_api_layer::capture {
                 }
             }
 
-            auto frame = m_framePool.TryGetNextFrame();
-            if (frame != nullptr) {
-                ComPtr<ID3D11Texture2D> surface;
-                auto access = frame.Surface().as<IDirect3DDXGIInterfaceAccess>();
-                CHECK_HRCMD(access->GetInterface(winrt::guid_of<ID3D11Texture2D>(),
-                                                 reinterpret_cast<void**>(surface.ReleaseAndGetAddressOf())));
+            // C (3.7.2026): WGC-Capture-Rate deckeln (gemessene Freeze-Ursache 3.7. =
+            // WGC-Capture stallt in iRacings GPU-Leerlauf-Lücken bei leichter Last).
+            // Der DWM füllt den FreeThreaded-FramePool auf SEINEM Takt; solange wir nicht
+            // TryGetNextFrame rufen, staut sich der Pool (Backpressure) → DWM captured
+            // seltener → weniger WGC-/GPU-Last. Zwischen den Pulls geben wir die zuletzt
+            // gecapturte Surface zurück (der Frame wird gehalten → Pointer bleibt gültig).
+            // Kein Throttle bis zur ersten Surface (Setup wartet sonst ewig) und wenn
+            // m_minPullIntervalNs==0 (Alt-Verhalten). Analog OpenKneeboards „cap window
+            // capture framerate". Nur die Bild-INHALT-Rate sinkt; die Quad-Pose läuft
+            // Layer-seitig in voller Rate weiter.
+            const auto now = std::chrono::steady_clock::now();
+            const int64_t sinceNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                        now - m_lastPull).count();
+            const bool doPull = (m_minPullIntervalNs <= 0) || !m_lastCapturedSurface ||
+                                (sinceNs >= m_minPullIntervalNs);
+            if (doPull) {
+                m_lastPull = now;
+                auto frame = m_framePool.TryGetNextFrame();
+                if (frame != nullptr) {
+                    ComPtr<ID3D11Texture2D> surface;
+                    auto access = frame.Surface().as<IDirect3DDXGIInterfaceAccess>();
+                    CHECK_HRCMD(access->GetInterface(winrt::guid_of<ID3D11Texture2D>(),
+                                                     reinterpret_cast<void**>(surface.ReleaseAndGetAddressOf())));
 
-                m_lastCapturedFrame = frame;
-                m_lastCapturedSurface = surface;
+                    m_lastCapturedFrame = frame;
+                    m_lastCapturedSurface = surface;
+                }
             }
 
             return m_lastCapturedSurface.Get();
@@ -102,6 +130,9 @@ namespace openxr_api_layer::capture {
         winrt::Windows::Graphics::Capture::Direct3D11CaptureFrame m_lastCapturedFrame{nullptr};
         ComPtr<ID3D11Texture2D> m_lastCapturedSurface;
         winrt::Windows::Graphics::SizeInt32 m_lastSize{};
+        // C (3.7.2026): Capture-Rate-Throttle.
+        int64_t m_minPullIntervalNs{0};
+        std::chrono::steady_clock::time_point m_lastPull{};
     };
 
 } // namespace openxr_api_layer::capture
