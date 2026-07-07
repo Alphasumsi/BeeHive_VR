@@ -32,8 +32,17 @@ try { fs.mkdirSync(path.dirname(ATLAS_LOG_PATH), { recursive: true }); } catch {
 // 3-MB-Cap mit einmaliger Rotation auf .old. Per-Write-Stat ist akzeptabel
 // — Log-Volume ist im Hundertstel-Sekunden-Bereich, kein Hot-Path.
 const ATLAS_LOG_MAX_BYTES = 3 * 1024 * 1024;
+// 7.7.2026: Lokalzeit statt toISOString()/UTC, damit atlas.log 1:1 zu den
+// C++-Logs (stalls.log/engine.log, localtime_s) passt — sonst 2h-Falle beim
+// Freeze-Cross-Ref. Format YYYY-MM-DD HH:MM:SS.mmm (ms nur für atlas-interne
+// Reihenfolge; beim Vergleich mit stalls.log einfach abschneiden).
+function localTs(d: Date): string {
+  const p = (n: number, w = 2): string => String(n).padStart(w, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ` +
+         `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+}
 function atlasLog(msg: string): void {
-  const line = `${new Date().toISOString()} ${msg}\n`;
+  const line = `${localTs(new Date())} ${msg}\n`;
   try {
     try {
       const stat = fs.statSync(ATLAS_LOG_PATH);
