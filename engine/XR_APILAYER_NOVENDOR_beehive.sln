@@ -7,6 +7,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "xr-api-beehive", "xr-api-be
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "browser-host", "browser-host\browser-host.vcxproj", "{B1C2D3E4-F5A6-4789-9ABC-DEF012345678}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "capture-host", "capture-host\capture-host.vcxproj", "{C7D8E9F0-1234-4ABC-9DEF-0123456789AB}"
+EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Files", "Solution Files", "{A53ED6CB-95D3-4833-8A16-C6A588F16F6E}"
 	ProjectSection(SolutionItems) = preProject
 		.clang-format = .clang-format
@@ -36,6 +38,10 @@ Global
 		{B1C2D3E4-F5A6-4789-9ABC-DEF012345678}.Debug|x64.Build.0 = Debug|x64
 		{B1C2D3E4-F5A6-4789-9ABC-DEF012345678}.Release|x64.ActiveCfg = Release|x64
 		{B1C2D3E4-F5A6-4789-9ABC-DEF012345678}.Release|x64.Build.0 = Release|x64
+		{C7D8E9F0-1234-4ABC-9DEF-0123456789AB}.Debug|x64.ActiveCfg = Debug|x64
+		{C7D8E9F0-1234-4ABC-9DEF-0123456789AB}.Debug|x64.Build.0 = Debug|x64
+		{C7D8E9F0-1234-4ABC-9DEF-0123456789AB}.Release|x64.ActiveCfg = Release|x64
+		{C7D8E9F0-1234-4ABC-9DEF-0123456789AB}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
