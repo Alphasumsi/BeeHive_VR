@@ -34,6 +34,14 @@ namespace openxr_api_layer::capture {
         // C (3.7.2026): minimaler Abstand zwischen WGC-Frame-Pulls in Nanosekunden.
         // 0 = jeder getSurface()-Aufruf pullt (Alt-Verhalten). >0 = Capture-Rate gedeckelt.
         virtual void setMinPullIntervalNs(int64_t ns) = 0;
+
+        // C2 (8.7.2026): drosselt die Capture PRODUCER-seitig via
+        // GraphicsCaptureSession.MinUpdateInterval (Win11 24H2+, Build 26100+) — der DWM
+        // erzeugt dann wirklich nur alle N ns einen Frame, statt (24H2-Verhalten, von
+        // OpenKneeboard v1.10.16 dokumentiert) permanent zu capturen. C drosselt nur unser
+        // ABHOLEN; die DWM-Blits in die Pool-Surfaces auf iRacings Device liefen weiter —
+        // C2 nimmt genau die weg. Rückgabe false = API nicht verfügbar (älteres Windows).
+        virtual bool setMinUpdateIntervalNs(int64_t ns) = 0;
     };
 
     struct CaptureWindowWinRT : ICaptureWindow {
@@ -69,6 +77,19 @@ namespace openxr_api_layer::capture {
         }
 
         void setMinPullIntervalNs(int64_t ns) override { m_minPullIntervalNs = ns; }
+
+        bool setMinUpdateIntervalNs(int64_t ns) override {
+            if (ns <= 0) return true; // 0 = aus (DWM-Default), nichts zu setzen
+            try {
+                // TimeSpan = 100-ns-Einheiten. Werte <1ms verhalten sich laut
+                // Win32CaptureSample #82 buggy — wir kommen von Hz-Werten (<=60) → immer >=16ms.
+                m_session.MinUpdateInterval(winrt::Windows::Foundation::TimeSpan{ns / 100});
+                return true;
+            } catch (const winrt::hresult_error&) {
+                // OS ohne IGraphicsCaptureSession5 (vor 24H2/26100) — kein Fehler, nur kein C2.
+                return false;
+            }
+        }
 
         ID3D11Texture2D* getSurface() override {
             // Window-Resize-Detection: GraphicsCaptureItem.Size aktualisiert sich live mit dem

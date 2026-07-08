@@ -21,6 +21,11 @@
 #include <cmath>
 #include <d3dcompiler.h>
 
+// D1 (8.7.2026): TexOut-/HL-Layouts für den externen Capture-Pfad (capture-host).
+// FrameSlot/QuadSlot bleiben bis zur Cleanup-Phase als private Kopien unten definiert
+// (byte-identisch; der shared Header ist namespaced, keine Kollision).
+#include "../shared/beehive_shm.h"
+
 #pragma comment(lib, "d3dcompiler.lib")
 
 namespace openxr_api_layer {
@@ -244,6 +249,47 @@ void main(uint2 tid : SV_DispatchThreadID)
                     m_captureMinPullNs = (captureHz > 0) ? (1000000000LL / captureHz) : 0;
                     Log(fmt::format("C: WGC-Capture-Throttle = {} Hz (minPull={} ns; 0=aus)\n",
                                     captureHz, m_captureMinPullNs));
+                    // C2 (8.7.2026): DWM-seitige Capture-Drossel via
+                    // GraphicsCaptureSession.MinUpdateInterval (24H2+/Build 26100+). C drosselt
+                    // nur unser Abholen — der DWM blittete (24H2-Verhalten „ständig neue
+                    // Frames", vgl. OpenKneeboard v1.10.16) trotzdem voll-rate in die
+                    // Pool-Surfaces auf iRacings Device. C2 drosselt die PRODUKTION.
+                    // BEEHIVE_DWM_CAPTURE_HZ=<n> (Default = BEEHIVE_CAPTURE_HZ, =0 aus).
+                    // Angewendet wird der Wert beim Capture-Attach (Session-Property).
+                    int dwmHz = captureHz; // Default: gleiche Rate wie C (HZ=0-Baseline schaltet beide ab)
+                    if (const char* e = std::getenv("BEEHIVE_DWM_CAPTURE_HZ")) dwmHz = std::atoi(e);
+                    m_captureMinUpdateNs = (dwmHz > 0) ? (1000000000LL / dwmHz) : 0;
+                    Log(fmt::format("C2: DWM-MinUpdateInterval-Ziel = {} Hz (minUpdate={} ns; 0=aus)\n",
+                                    dwmHz, m_captureMinUpdateNs));
+
+                    // D1 (8.7.2026): externer Capture-Pfad — capture-host.exe macht
+                    // WGC+Compose in EIGENEM Prozess (eigene WDDM-Allokationen), der
+                    // Layer kopiert nur noch fertige Shared-Texturen (Fence-gecheckt,
+                    // Keyed-Mutex non-blocking). Phase 3: Default AUS, Kill-Switch-Ära.
+                    if (const char* e = std::getenv("BEEHIVE_EXTERNAL_CAPTURE"))
+                        m_externalCapture = std::atoi(e) == 1;
+                    Log(m_externalCapture
+                            ? "D1: Capture-Modus = EXTERN (capture-host, Shared-Texture-Handoff)\n"
+                            : "D1: Capture-Modus = intern (Layer-WGC, klassisch)\n");
+
+                    // HL-Block IMMER anlegen (auch im internen Modus, harmlos): der
+                    // Helper braucht layerPid daraus als Handle-Duplikations-Ziel,
+                    // und Hover/Grab-Zustand für die Border im externen Compose.
+                    m_hlMapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr,
+                                                     PAGE_READWRITE, 0,
+                                                     sizeof(beehive::shm::HighlightSlot),
+                                                     beehive::shm::kHighlightMappingName);
+                    if (m_hlMapping) {
+                        m_hlView = MapViewOfFile(m_hlMapping, FILE_MAP_WRITE, 0, 0,
+                                                 sizeof(beehive::shm::HighlightSlot));
+                        if (m_hlView) {
+                            std::memset(m_hlView, 0, sizeof(beehive::shm::HighlightSlot));
+                            Log("D1: HL-Mapping bereit (Local\\BeeHiveVR_HL)\n");
+                        } else {
+                            CloseHandle(m_hlMapping);
+                            m_hlMapping = nullptr;
+                        }
+                    }
                 }
             }
             m_xefEntryFrame.store(m_frameCount, std::memory_order_relaxed);
@@ -273,6 +319,13 @@ void main(uint2 tid : SV_DispatchThreadID)
                 m_inputSetupTried = true;
                 SetupInput();
             }
+
+            // D1 (8.7.2026): HL-Block JEDEN Frame publizieren — bewusst VOR dem
+            // Setup-Gate: der Helper braucht layerPid daraus als Handle-
+            // Duplikations-Ziel, und die Duplikation ist Voraussetzung dafür,
+            // dass unser externes Setup überhaupt fertig werden kann (sonst
+            // Henne-Ei: Layer wartet auf Handles, Helper wartet auf layerPid).
+            PublishHighlight();
 
             // EnsureSetup is idempotent — it keeps trying every frame until
             // Electron has populated the FrameSlot and our swapchain is built.
@@ -304,6 +357,8 @@ void main(uint2 tid : SV_DispatchThreadID)
                             m_captureWindow =
                                 std::make_unique<capture::CaptureWindowWinRT>(m_appDevice, newHwnd);
                             m_captureWindow->setMinPullIntervalNs(m_captureMinPullNs);  // C
+                            if (!m_captureWindow->setMinUpdateIntervalNs(m_captureMinUpdateNs))  // C2
+                                Log("C2: MinUpdateInterval nicht verfügbar (Windows < 24H2) — DWM-Drossel aus\n");
                             m_capturedHwnd = newHwnd;
                             m_capturedPid  = a.producerPid;
                         } catch (const winrt::hresult_error& e) {
@@ -388,7 +443,15 @@ void main(uint2 tid : SV_DispatchThreadID)
                 }
 
                 SetXefPhase(XefPhase::Texture);
-                ID3D11Texture2D* currentTex = GetCurrentTexture();
+                // D1: im externen Modus kommt die Textur aus dem capture-host-Ring
+                // (Fence-Check + Reopen/Resize in ProcessExternalPerFrame); der
+                // interne WGC-Pfad bleibt vollständig erhalten (Kill-Switch-Ära).
+                bool extReady = false;
+                ID3D11Texture2D* currentTex = nullptr;
+                if (m_externalCapture) {
+                    extReady = ProcessExternalPerFrame();
+                } else {
+                currentTex = GetCurrentTexture();
                 if (currentTex) {
                     // C3b (4.6.2026): Atlas-BrowserWindow wächst dynamisch wenn
                     // WPF mehr/größere Sources schickt. WGC's CaptureWindowWinRT
@@ -407,6 +470,7 @@ void main(uint2 tid : SV_DispatchThreadID)
                         }
                     }
                 }
+                } // Ende interner Texture-Zweig — D1
                 // F5 (6.6.2026): Publisher-Liveness vor dem Composen prüfen.
                 // FrameSlot.generation muss innerhalb kWatchdogStaleFrames
                 // bumpen, sonst gilt Atlas als tot → wir composen keine Quads
@@ -437,9 +501,12 @@ void main(uint2 tid : SV_DispatchThreadID)
                     }
                 }
 
-                if (currentTex && publisherAlive) {
+                if (m_externalCapture ? (extReady && publisherAlive)
+                                      : (currentTex && publisherAlive)) {
                     SetXefPhase(XefPhase::Compose);
-                    const uint32_t n = RenderAtlasQuads(currentTex, quadStorage.data());
+                    const uint32_t n = m_externalCapture
+                                           ? RenderAtlasQuadsExternal(quadStorage.data())
+                                           : RenderAtlasQuads(currentTex, quadStorage.data());
                     for (uint32_t i = 0; i < n; ++i) {
                         layers.push_back(
                             reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quadStorage[i]));
@@ -593,6 +660,12 @@ void main(uint2 tid : SV_DispatchThreadID)
                 return false;
             }
 
+            // D1 (8.7.2026): im externen Modus liefert capture-host die fertige
+            // Textur — hier nur TexOut öffnen + Shared-Handles importieren; die
+            // WGC-Schritte (c)+(d) entfallen komplett (kein WinRT im Spielprozess).
+            if (m_externalCapture) {
+                if (!EnsureExternalSource()) return false;
+            } else {
             // (c) Start WGC capture against Electron's window — ONCE. The
             //     ctor builds an interop D3D11 device wrapping our app device,
             //     creates a free-threaded frame pool, and starts the session.
@@ -609,6 +682,8 @@ void main(uint2 tid : SV_DispatchThreadID)
                     m_captureWindow =
                         std::make_unique<capture::CaptureWindowWinRT>(m_appDevice, m_capturedHwnd);
                     m_captureWindow->setMinPullIntervalNs(m_captureMinPullNs);  // C
+                    if (!m_captureWindow->setMinUpdateIntervalNs(m_captureMinUpdateNs))  // C2
+                        Log("C2: MinUpdateInterval nicht verfügbar (Windows < 24H2) — DWM-Drossel aus\n");
                 } catch (const winrt::hresult_error& e) {
                     Log(fmt::format("setup: CaptureWindowWinRT ctor failed hr=0x{:08x} ({})\n",
                                     (uint32_t)e.code().value,
@@ -638,6 +713,7 @@ void main(uint2 tid : SV_DispatchThreadID)
             m_texFormat = desc.Format;
             Log(fmt::format("setup: first WGC frame received {}x{} fmt={}\n",
                             m_texWidth, m_texHeight, (int)m_texFormat));
+            } // Ende interner (WGC-)Setup-Zweig — D1
 
             // (e) ReferenceSpace LOCAL — fixed quad pose.
             XrReferenceSpaceCreateInfo rsi{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
@@ -694,7 +770,8 @@ void main(uint2 tid : SV_DispatchThreadID)
             // (g) Chroma-Key Compute-Pipeline bauen. Fehler hier sind nicht fatal —
             //     m_chromaReady=false fällt im Per-Frame-Path zurück auf CopyResource
             //     (alte Pipeline, kein Chroma-Key, dafür sicher passierbarer Magenta-bg).
-            SetupChromaPipeline();
+            //     D1: im externen Modus komponiert der capture-host — keine Pipeline hier.
+            if (!m_externalCapture) SetupChromaPipeline();
             return true;
         }
 
@@ -849,6 +926,194 @@ void main(uint2 tid : SV_DispatchThreadID)
             return true;
         }
 
+        // ===== D1 (8.7.2026): externer Capture-Pfad =============================
+        // capture-host.exe (eigener Prozess) macht WGC + Chroma-Compose und
+        // publiziert einen 3er-Ring aus Shared-Texturen via Local\BeeHiveVR_TexOut.
+        // Hier: Handles importieren (bereits vom Helper IN UNSEREN Prozess
+        // dupliziert — wir machen KEIN OpenProcess, crasht aus iRacings Adressraum,
+        // Lehre 17.6.) und pro Frame nicht-blockierend den fertigsten Buffer kopieren.
+
+        bool ReadTexOutStable(beehive::shm::TexOutSlot& out) {
+            if (!m_texOutView) return false;
+            beehive::shm::TexOutSlot a{}, b{};
+            std::memcpy(&a, m_texOutView, sizeof(a));
+            std::memcpy(&b, m_texOutView, sizeof(b));
+            if (a.generation != b.generation) return false;
+            out = a;
+            return true;
+        }
+
+        // Öffnet die vom Helper duplizierten Textur-/Fence-Handles auf unserem
+        // (iRacings) Device. Handles werden nach dem Open sofort geschlossen —
+        // die D3D-Objekte halten eigene Referenzen; bei Epoch-/Helper-Wechsel
+        // liefert TexOut frische Handle-Werte.
+        bool OpenExternalResources(const beehive::shm::TexOutSlot& t) {
+            using namespace beehive::shm;
+            if (!m_appDevice1 &&
+                FAILED(m_appDevice->QueryInterface(IID_PPV_ARGS(m_appDevice1.ReleaseAndGetAddressOf())))) {
+                Log("D1: ID3D11Device1 nicht verfügbar — externer Pfad unmöglich\n");
+                return false;
+            }
+            if (!m_appDevice5 &&
+                FAILED(m_appDevice->QueryInterface(IID_PPV_ARGS(m_appDevice5.ReleaseAndGetAddressOf())))) {
+                Log("D1: ID3D11Device5 nicht verfügbar — externer Pfad unmöglich\n");
+                return false;
+            }
+
+            for (uint32_t i = 0; i < kTexRingBuffers; ++i) { m_extMutex[i].Reset(); m_extTex[i].Reset(); }
+            m_extFence.Reset();
+            m_extLastGood = -1;
+
+            for (uint32_t i = 0; i < kTexRingBuffers; ++i) {
+                HANDLE h = (HANDLE)(uintptr_t)t.texHandleInTarget[i];
+                if (!h) { Log("D1: Textur-Handle fehlt\n"); return false; }
+                HRESULT hr = m_appDevice1->OpenSharedResource1(
+                    h, IID_PPV_ARGS(m_extTex[i].ReleaseAndGetAddressOf()));
+                CloseHandle(h);
+                if (FAILED(hr)) {
+                    Log(fmt::format("D1: OpenSharedResource1[{}] hr=0x{:08x}\n", i, (uint32_t)hr));
+                    return false;
+                }
+                if (FAILED(m_extTex[i].As(&m_extMutex[i]))) {
+                    Log("D1: QI IDXGIKeyedMutex fehlgeschlagen\n");
+                    return false;
+                }
+            }
+            {
+                HANDLE h = (HANDLE)(uintptr_t)t.fenceHandleInTarget;
+                if (!h) { Log("D1: Fence-Handle fehlt\n"); return false; }
+                HRESULT hr = m_appDevice5->OpenSharedFence(
+                    h, IID_PPV_ARGS(m_extFence.ReleaseAndGetAddressOf()));
+                CloseHandle(h);
+                if (FAILED(hr)) {
+                    Log(fmt::format("D1: OpenSharedFence hr=0x{:08x}\n", (uint32_t)hr));
+                    return false;
+                }
+            }
+            m_openedEpoch = t.texEpoch;
+            m_openedHelperPid = t.helperPid;
+            Log(fmt::format("D1: Shared-Ring importiert ({}x{}, epoch={}, helperPid={})\n",
+                            t.texWidth, t.texHeight, t.texEpoch, t.helperPid));
+            return true;
+        }
+
+        // Setup-Teil des externen Pfads (aus EnsureSetup): TexOut öffnen, auf für
+        // UNS duplizierte Handles warten, importieren, m_tex*-Members setzen.
+        bool EnsureExternalSource() {
+            using namespace beehive::shm;
+            if (!m_texOutMapping) {
+                m_texOutMapping = OpenFileMappingW(FILE_MAP_READ, FALSE, kTexOutMappingName);
+                if (!m_texOutMapping) {
+                    if (!m_loggedNoTexOut) {
+                        Log("D1: TexOut-SHM noch nicht da — wartet auf capture-host\n");
+                        m_loggedNoTexOut = true;
+                    }
+                    return false;
+                }
+                m_texOutView = MapViewOfFile(m_texOutMapping, FILE_MAP_READ, 0, 0,
+                                             sizeof(TexOutSlot));
+                if (!m_texOutView) {
+                    CloseHandle(m_texOutMapping);
+                    m_texOutMapping = nullptr;
+                    return false;
+                }
+                Log("D1: TexOut-SHM offen\n");
+            }
+            TexOutSlot t{};
+            if (!ReadTexOutStable(t)) return false;
+            if (t.texEpoch == 0 || t.texWidth == 0 || t.texHeight == 0) return false;
+            if (t.targetPid != GetCurrentProcessId()) {
+                // Helper hat unsere PID noch nicht aus dem HL-Block gelesen bzw.
+                // noch nicht dupliziert — nächster Frame.
+                if (!m_loggedAwaitingHandles) {
+                    Log(fmt::format("D1: warte auf Handle-Duplikation (targetPid={} != wir)\n",
+                                    t.targetPid));
+                    m_loggedAwaitingHandles = true;
+                }
+                return false;
+            }
+            if (!OpenExternalResources(t)) return false;
+            m_texWidth  = t.texWidth;
+            m_texHeight = t.texHeight;
+            m_texFormat = DXGI_FORMAT_R8G8B8A8_UNORM; // Helper-Ring ist immer UNORM
+            return true;
+        }
+
+        // Per-Frame-Teil des externen Pfads: TexOut lesen (torn → letzter Stand),
+        // Helper-Watchdog, Epoch-/Helper-Wechsel-Reopen, Größen-Rebuild, Copy-Index
+        // per CPU-seitigem Fence-Check wählen. true = es gibt etwas zu zeigen.
+        bool ProcessExternalPerFrame() {
+            using namespace beehive::shm;
+            if (!m_texOutView) return false;
+
+            TexOutSlot t{};
+            if (ReadTexOutStable(t)) {
+                m_lastTexOut = t;
+            } else {
+                t = m_lastTexOut; // torn read — mit letztem stabilen Stand weiter
+            }
+            if (t.texEpoch == 0) return false;
+
+            // Helper-Liveness (Spiegel des F5-Watchdogs): generation muss bumpen.
+            if (t.generation != m_texOutLastGen) {
+                m_texOutLastGen = t.generation;
+                m_texOutStagnant = 0;
+                if (m_texOutTripped) {
+                    m_texOutTripped = false;
+                    Log("D1-Watchdog: capture-host wieder da — Quads an\n");
+                }
+            } else if (++m_texOutStagnant > kWatchdogStaleFrames) {
+                if (!m_texOutTripped) {
+                    m_texOutTripped = true;
+                    Log("D1-Watchdog: capture-host stale — Quads aus\n");
+                }
+                return false;
+            }
+
+            // Helper-Restart oder Ring-Neuaufbau (Atlas-Resize) → neu importieren.
+            if (t.texEpoch != m_openedEpoch || t.helperPid != m_openedHelperPid) {
+                if (t.targetPid != GetCurrentProcessId()) return false; // Duplikation läuft noch
+                if (!OpenExternalResources(t)) return false;
+            }
+            // Swapchain an Ring-Größe koppeln (Reuse des Resize-Pfads; der baut auch
+            // das — extern ungenutzte — Chroma-Intermediate mit, harmlos bis Phase 6).
+            if (t.texWidth != m_texWidth || t.texHeight != m_texHeight) {
+                Log(fmt::format("D1: Ring-Resize {}x{} -> {}x{}, rebuilding swapchain\n",
+                                m_texWidth, m_texHeight, t.texWidth, t.texHeight));
+                if (!RebuildSwapchainForNewSize(t.texWidth, t.texHeight)) return false;
+            }
+
+            // Copy-Index: latest wenn Fence-fertig (CPU-Check, NIE blockieren),
+            // sonst letzter bekannt-guter Buffer, sonst nichts zeigen.
+            m_extCopyIndex = -1;
+            if (m_extFence) {
+                const uint32_t latest = (t.latestIndex < kTexRingBuffers) ? t.latestIndex : 0;
+                const uint64_t completed = m_extFence->GetCompletedValue();
+                if (t.fenceValue[latest] != 0 && completed >= t.fenceValue[latest])
+                    m_extCopyIndex = (int)latest;
+                else if (m_extLastGood >= 0)
+                    m_extCopyIndex = m_extLastGood;
+            }
+            return m_extCopyIndex >= 0;
+        }
+
+        // Hover-/Grab-Zustand an den Helper publizieren (der faltet ihn in die
+        // Border-Konstanten). Läuft in BEIDEN Modi — layerPid daraus ist das
+        // Duplikations-Ziel des Helpers. 64-Byte-memcpy pro Frame, vernachlässigbar.
+        void PublishHighlight() {
+            if (!m_hlView) return;
+            beehive::shm::HighlightSlot hl{};
+            hl.generation = ++m_hlGeneration;
+            if (m_hoveredHand != -1) std::memcpy(hl.hoveredId, m_hoveredId, 16);
+            if (m_grabHand != -1) {
+                std::memcpy(hl.grabbedId, m_grabTargetId, 16);
+                hl.dragOpacity = m_dragOpacity;
+                hl.flags = 1u; // bit0 = dragOpacity gültig
+            }
+            hl.layerPid = GetCurrentProcessId();
+            std::memcpy(m_hlView, &hl, sizeof(hl));
+        }
+
         // Returns the latest WGC-captured surface, or nullptr if the pool has
         // not produced a frame this cycle. The CaptureWindowWinRT caches the
         // last surface internally so consecutive calls without a fresh frame
@@ -901,6 +1166,21 @@ void main(uint2 tid : SV_DispatchThreadID)
             if (m_placeOutMapping) { CloseHandle(m_placeOutMapping);     m_placeOutMapping = nullptr; }
             if (m_mapView)         { UnmapViewOfFile(m_mapView);         m_mapView = nullptr; }
             if (m_mapping)         { CloseHandle(m_mapping);              m_mapping = nullptr; }
+            // D1: externer Pfad — Shared-Ring/Fence/TexOut freigeben (HL-Mapping
+            // bleibt bewusst: es lebt process-lifetime, Helper braucht layerPid).
+            for (uint32_t i = 0; i < beehive::shm::kTexRingBuffers; ++i) {
+                m_extMutex[i].Reset();
+                m_extTex[i].Reset();
+            }
+            m_extFence.Reset();
+            m_openedEpoch = 0;
+            m_openedHelperPid = 0;
+            m_extCopyIndex = -1;
+            m_extLastGood = -1;
+            if (m_texOutView)    { UnmapViewOfFile((void*)m_texOutView); m_texOutView = nullptr; }
+            if (m_texOutMapping) { CloseHandle(m_texOutMapping);         m_texOutMapping = nullptr; }
+            m_loggedNoTexOut = false;
+            m_loggedAwaitingHandles = false;
             m_texWidth = m_texHeight = 0;
             m_loggedNoMapping = false;
             m_loggedAwaitingFrame = false;
@@ -1762,6 +2042,112 @@ void main(uint2 tid : SV_DispatchThreadID)
             return written;
         }
 
+        // D1 (8.7.2026): externes Pendant zu RenderAtlasQuads. Acquire/Wait/
+        // Release-Muster und Quad-Emission BYTE-IDENTISCH zum internen Pfad
+        // (VDXR-Lehre 1.7.: daran wird nie geschraubt) — nur die Mitte ist statt
+        // Chroma-Dispatch ein einziges CopyResource aus dem Shared-Ring, gated
+        // durch Keyed-Mutex AcquireSync(0, timeout=0) (Route-A-Lehre: Consumer-
+        // Timeout zwingend 0, NIE blockieren). Schlägt Acquire fehl (Helper
+        // schreibt gerade genau diesen Buffer), versuchen wir lastGood; schlägt
+        // auch das fehl, bleibt das acquired Image un-kopiert (zeigt ein ~3 Frames
+        // altes Bild — bei 30-Hz-Content unsichtbar, und extrem selten).
+        uint32_t RenderAtlasQuadsExternal(XrCompositionLayerQuad* outQuads) {
+            FrameSlot frame{};
+            std::array<QuadSlot, kMaxQuads> slots{};
+            memcpy(&frame, m_mapView, sizeof(frame));
+            const uint32_t requested = std::min<uint32_t>(frame.quadCount, kMaxQuads);
+            if (requested > 0) {
+                memcpy(slots.data(),
+                       (const std::byte*)m_mapView + sizeof(FrameSlot),
+                       requested * sizeof(QuadSlot));
+            }
+
+            XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+            uint32_t imageIndex = 0;
+            XrResult xr = OpenXrApi::xrAcquireSwapchainImage(m_swapchain, &ai, &imageIndex);
+            if (XR_FAILED(xr)) {
+                if (!m_loggedAcquireFail) {
+                    Log(fmt::format("frame: xrAcquireSwapchainImage res={}\n", (int)xr));
+                    m_loggedAcquireFail = true;
+                }
+                return 0;
+            }
+            XrSwapchainImageWaitInfo wi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+            wi.timeout = XR_INFINITE_DURATION;
+            xr = OpenXrApi::xrWaitSwapchainImage(m_swapchain, &wi);
+            if (XR_FAILED(xr)) {
+                Log(fmt::format("frame: xrWaitSwapchainImage res={}\n", (int)xr));
+                return 0;
+            }
+
+            ID3D11Texture2D* dst = m_swapchainTextures[imageIndex];
+            {
+                const int idx = m_extCopyIndex;
+                if (idx >= 0 && m_extTex[idx] && m_extMutex[idx]) {
+                    if (m_extMutex[idx]->AcquireSync(0, 0) == S_OK) {
+                        m_appContext->CopyResource(dst, m_extTex[idx].Get());
+                        m_extMutex[idx]->ReleaseSync(0);
+                        m_extLastGood = idx;
+                    } else if (m_extLastGood >= 0 && m_extLastGood != idx &&
+                               m_extMutex[m_extLastGood] &&
+                               m_extMutex[m_extLastGood]->AcquireSync(0, 0) == S_OK) {
+                        m_appContext->CopyResource(dst, m_extTex[m_extLastGood].Get());
+                        m_extMutex[m_extLastGood]->ReleaseSync(0);
+                    }
+                }
+            }
+
+            XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+            xr = OpenXrApi::xrReleaseSwapchainImage(m_swapchain, &ri);
+            if (XR_FAILED(xr)) {
+                Log(fmt::format("frame: xrReleaseSwapchainImage res={}\n", (int)xr));
+                return 0;
+            }
+
+            // Quad-Emission — identisch zum internen Pfad (inkl. Drag-Override +
+            // QuadRectFitsAtlas gegen die Swapchain-Größe; out-of-range imageRect
+            // black-screent VDXR, der Check ist nicht verhandelbar).
+            uint32_t written = 0;
+            uint32_t skippedOutOfRange = 0;
+            for (uint32_t i = 0; i < requested; ++i) {
+                QuadSlot s = slots[i];
+                if (!s.visible) continue;
+                if (!QuadRectFitsAtlas(s)) { ++skippedOutOfRange; continue; }
+                if (m_grabHand != -1 && std::strncmp(s.id, m_grabTargetId, 16) == 0) {
+                    s.posX = m_dragPosX; s.posY = m_dragPosY; s.posZ = m_dragPosZ;
+                    s.quatX = m_dragQuatX; s.quatY = m_dragQuatY;
+                    s.quatZ = m_dragQuatZ; s.quatW = m_dragQuatW;
+                    s.sizeW = m_dragSizeW; s.sizeH = m_dragSizeH;
+                    s.opacity = m_dragOpacity;  // live ALT-Drag (B10)
+                }
+                XrCompositionLayerQuad& q = outQuads[written++];
+                q.type = XR_TYPE_COMPOSITION_LAYER_QUAD;
+                q.next = nullptr;
+                q.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+                q.space = m_localSpace;
+                q.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+                q.subImage.swapchain = m_swapchain;
+                q.subImage.imageRect = {{(int32_t)s.rectX, (int32_t)s.rectY},
+                                        {(int32_t)s.rectW, (int32_t)s.rectH}};
+                q.subImage.imageArrayIndex = 0;
+                q.pose.position    = {s.posX, s.posY, s.posZ};
+                q.pose.orientation = {s.quatX, s.quatY, s.quatZ, s.quatW};
+                q.size             = {s.sizeW, s.sizeH};
+            }
+
+            if (skippedOutOfRange != m_lastSkippedOutOfRange) {
+                Log(fmt::format("atlas: {} quad(s) skipped (rect > swapchain {}x{}) — waiting for ring resize\n",
+                                skippedOutOfRange, m_texWidth, m_texHeight));
+                m_lastSkippedOutOfRange = skippedOutOfRange;
+            }
+            if (!m_loggedFirstQuads && written > 0) {
+                m_loggedFirstQuads = true;
+                Log(fmt::format("atlas: rendering {} quad(s) [EXTERN], atlas={}x{}\n",
+                                written, frame.width, frame.height));
+            }
+            return written;
+        }
+
         // ===== Stall-Watchdog (25.6.2026) ===================================
         // Lokalisiert mehrsekündige VR-Freezes (Bild steht, Audio/Physik/Discord
         // laufen weiter → Render-Thread hängt in xrEndFrame). Der Render-Thread
@@ -1996,6 +2382,30 @@ void main(uint2 tid : SV_DispatchThreadID)
         std::atomic<bool>     m_stallThreadStop{false};
         bool                  m_stallThreadStarted{false};
         int64_t               m_captureMinPullNs{0};  // C: WGC-Capture-Throttle (BEEHIVE_CAPTURE_HZ), 0=aus
+        int64_t               m_captureMinUpdateNs{0}; // C2: DWM-MinUpdateInterval (BEEHIVE_DWM_CAPTURE_HZ), 0=aus
+
+        // D1 (8.7.2026): externer Capture-Pfad (capture-host, BEEHIVE_EXTERNAL_CAPTURE).
+        bool                  m_externalCapture{false};
+        HANDLE                m_hlMapping{nullptr};      // Local\BeeHiveVR_HL (wir = Writer)
+        void*                 m_hlView{nullptr};
+        uint64_t              m_hlGeneration{0};
+        HANDLE                m_texOutMapping{nullptr};  // Local\BeeHiveVR_TexOut (Helper = Writer)
+        const void*           m_texOutView{nullptr};
+        beehive::shm::TexOutSlot m_lastTexOut{};
+        ComPtr<ID3D11Device1> m_appDevice1;
+        ComPtr<ID3D11Device5> m_appDevice5;
+        ComPtr<ID3D11Texture2D> m_extTex[beehive::shm::kTexRingBuffers];
+        ComPtr<IDXGIKeyedMutex> m_extMutex[beehive::shm::kTexRingBuffers];
+        ComPtr<ID3D11Fence>   m_extFence;
+        uint32_t              m_openedEpoch{0};
+        uint32_t              m_openedHelperPid{0};
+        int                   m_extCopyIndex{-1};
+        int                   m_extLastGood{-1};
+        uint64_t              m_texOutLastGen{0};
+        uint32_t              m_texOutStagnant{0};
+        bool                  m_texOutTripped{false};
+        bool                  m_loggedNoTexOut{false};
+        bool                  m_loggedAwaitingHandles{false};
         XrSwapchain m_swapchain{XR_NULL_HANDLE};
         std::vector<ID3D11Texture2D*> m_swapchainTextures; // runtime-owned
 
