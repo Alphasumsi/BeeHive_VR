@@ -77,9 +77,15 @@ namespace BeeHiveVR
             // Connect wird die Electron-Atlas-Exe hochgefahren (idempotent),
             // damit der User WPF + iRacing startet und Overlays automatisch
             // erscheinen — kein manuelles "npm start" mehr.
+            // D1 (8.7.2026): capture-host läuft daneben mit — er captured/composed
+            // den Atlas in eigenem Prozess, der Layer holt nur fertige Texturen.
             IRacingService.Instance.ConnectionChanged += (_, connected) =>
             {
-                if (connected) ElectronAtlasService.Instance.Start();
+                if (connected)
+                {
+                    ElectronAtlasService.Instance.Start();
+                    CaptureHostService.Instance.Start();
+                }
             };
             IRacingService.Instance.Start();
 
@@ -280,6 +286,7 @@ namespace BeeHiveVR
             // sauberen Atlas-Prozess anfängt (Single-Instance-Mutex würde sonst
             // greifen wenn ein Zombie aus der Vorsession noch lebt).
             ElectronAtlasService.Instance.Stop();
+            CaptureHostService.Instance.Stop();
             DashieAdapterService.Instance.Stop();
             RawInputService.Instance.Stop();
             EngineLink.Instance.Stop();
