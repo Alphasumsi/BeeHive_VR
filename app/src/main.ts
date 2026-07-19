@@ -171,7 +171,15 @@ const ATLAS_QUAD_GAP_PX = 10;
 
 // WPF authoritatively owns which quads exist — nothing in VR until
 // setAtlasLayout arrives with at least one entry.
-const currentLayout: QuadDesc[] = [];
+//
+// ⚠ MUSS `let` bleiben (NICHT zurück auf const!): der wpf-link-`disconnect`-Handler
+// weist hier komplett neu zu (`currentLayout = []`). Als `const` warf das zur
+// Laufzeit `TypeError: Assignment to constant variable` — und zwar GENAU dann, wenn
+// die WPF verschwindet. Der TypeError blockierte den Main-Thread (Electron-Fehler-
+// Modal), sodass der `--parent-pid`-Watchdog nie zu seinem `app.exit(0)` kam →
+// Symptom „Atlas bleibt nach WPF-Ende in der Taskleiste hängen" (18.7.2026).
+// Lag lange latent, weil der Vite/esbuild-Build NICHT typecheckt (tsc sähe TS2588).
+let currentLayout: QuadDesc[] = [];
 
 // id → target-URL pro Quad. Wird in jedem applyWpfLayout aktualisiert und
 // von syncIframes() zur DOM-Konstruktion gelesen. Iframes selbst werden über
@@ -1047,8 +1055,37 @@ function createCapturedWindow() {
   }
 }
 
+// --parent-pid=N (von der WPF gesetzt): stirbt die WPF unsauber (Crash/Task-Manager/
+// Shutdown → OnExit lief nicht → ElectronAtlasService.Stop nie), beenden wir uns
+// selbst. Ergänzt den Startup-Orphan-Sweep (der räumt Alt-Leichen; das hier verhindert
+// NEUE). Poll statt Blocking-Wait — Node ist single-threaded. Muster wie capture-host.
+function watchParentPid(): void {
+  const arg = process.argv.find((a) => a.startsWith('--parent-pid='));
+  if (!arg) return;
+  const pid = parseInt(arg.slice('--parent-pid='.length), 10);
+  if (!Number.isFinite(pid) || pid <= 0) return;
+  atlasLog(`[main] parent-watch aktiv (WPF pid=${pid})`);
+  setInterval(() => {
+    try {
+      process.kill(pid, 0); // Signal 0 = nur Existenz prüfen, kein Signal senden
+    } catch (e) {
+      // ESRCH = Prozess weg → WPF tot → Self-Exit. EPERM = existiert, nur keine
+      // Rechte → lebt weiter, kein Exit.
+      if ((e as NodeJS.ErrnoException).code === 'ESRCH') {
+        // app.exit() statt app.quit(): quit() kann von beschäftigten Renderern /
+        // before-quit-Handlern verzögert oder blockiert werden — genau das Symptom
+        // "Atlas schließt in laufender Session nicht" (18.7.). Der Watchdog muss
+        // hart raus; SHM-Mappings räumt der Prozess-Exit ohnehin auf.
+        atlasLog(`[main] Parent (WPF pid=${pid}) weg — Self-Exit (hart)`);
+        app.exit(0);
+      }
+    }
+  }, 2000);
+}
+
 app.whenReady().then(() => {
   console.log('[main] electron', process.versions.electron, 'chrome', process.versions.chrome);
+  watchParentPid();
 
   // 13.7.2026: Ersatz für die entfernten Anti-Throttling-Switches (s.o.):
   // hält Timer/Heartbeat am Leben wenn WPF minimiert + Atlas cloaked ist,

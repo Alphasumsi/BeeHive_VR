@@ -131,6 +131,7 @@ public sealed class DashiesPreviewService
                     return false;
                 }
                 Logger.Info($"PreviewService: browser-host started, pid={_process.Id}, exe={exePath}");
+                ChildProcessJob.Assign(_process); // stirbt mit der WPF (auch bei hartem Kill)
             }
             catch (Exception ex)
             {

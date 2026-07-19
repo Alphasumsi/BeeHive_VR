@@ -12,8 +12,10 @@ namespace BeeHiveVR
         // Single-Instance: hält die App-weit eindeutige Mutex + Aktivierungs-Event.
         private static Mutex? _instanceMutex;
         private static EventWaitHandle? _activateEvent;
+        private static EventWaitHandle? _quitEvent;
         private const string InstanceMutexName = AppEdition.InstanceMutexName;
         private const string ActivateEventName = AppEdition.ActivateEventName;
+        private const string QuitEventName     = AppEdition.QuitEventName;
 
         protected override void OnStartup(StartupEventArgs e)
         {
@@ -67,6 +69,41 @@ namespace BeeHiveVR
             {
                 Logger.Warn($"Single-instance activate listener failed: {ex.Message}");
             }
+
+            // 18.7.2026: Quit-Event für Automation (AHK/Scripts). Hintergrund: im
+            // Tray-Modus versteckt MainWindow sich per Hide() — AHK findet es dann
+            // ohne DetectHiddenWindows gar nicht, und ein harter Kill überspringt
+            // OnExit (→ Atlas/capture-host blieben früher als Waisen zurück).
+            // Signalisiert ein Script dieses Event, fahren wir regulär runter:
+            //   PowerShell:  [System.Threading.EventWaitHandle]::OpenExisting(
+            //                  'BeeHive_VR_Quit_8F3A1C20').Set()
+            try
+            {
+                _quitEvent = new EventWaitHandle(false, EventResetMode.AutoReset, QuitEventName);
+                var quitThread = new Thread(() =>
+                {
+                    while (true)
+                    {
+                        _quitEvent.WaitOne();
+                        Logger.Info("Quit-Event signalisiert — sauberer Shutdown angefordert.");
+                        Dispatcher.BeginInvoke(new System.Action(() => Shutdown()));
+                    }
+                })
+                { IsBackground = true, Name = "QuitEventListener" };
+                quitThread.Start();
+            }
+            catch (System.Exception ex)
+            {
+                Logger.Warn($"Quit-event listener failed: {ex.Message}");
+            }
+
+            // Atlas-Orphan-Sweep: verwaiste BeeHive_VR_Atlas-Prozesse aus einem
+            // unsauber beendeten Vorlauf killen, BEVOR wir (bei iRacing-Connect)
+            // einen neuen starten. Steht bewusst NACH dem Single-Instance-Guard →
+            // nur die First-Instance räumt auf; jeder vorgefundene Atlas ist stale.
+            // Bricht die „sticky orphan"-Kette (Electron-Single-Instance würde sonst
+            // unseren NEUEN Atlas killen und die Waise weiterlaufen lassen).
+            ElectronAtlasService.Instance.SweepOrphans();
 
             // Settings laden — VOR den Services damit Pfade & Toggles greifen.
             SettingsStore.Load();
@@ -294,6 +331,7 @@ namespace BeeHiveVR
             try { _instanceMutex?.ReleaseMutex(); } catch { }
             _instanceMutex?.Dispose();
             _activateEvent?.Dispose();
+            _quitEvent?.Dispose();
             base.OnExit(e);
         }
     }

@@ -61,6 +61,7 @@ public sealed class CaptureHostService
                     return false;
                 }
                 Logger.Info($"CaptureHostService: started, pid={_process.Id}, exe={exePath}");
+                ChildProcessJob.Assign(_process); // stirbt mit der WPF (auch bei hartem Kill)
                 return true;
             }
             catch (Exception ex)

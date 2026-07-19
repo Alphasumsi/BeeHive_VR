@@ -48,11 +48,26 @@ public sealed class ElectronAtlasService
                 return false;
             }
 
+            // 18.7.2026: VOR jedem Start sweepen, nicht nur beim WPF-Start. Grund
+            // (Trace-Beweis): stirbt der Atlas-HAUPTprozess, überleben seine Electron-
+            // Kindprozesse ungetrackt weiter — Stop()/Kill(tree) erreicht sie dann nicht
+            // mehr. Bei jedem Neustart sammelten sich so Zombies an, die weiter GPU-
+            // Arbeit machten (eigene Window-Capture + 3-s-getSources-Bursts) → Ruckeln
+            // bis hin zum adapter-weiten Freeze; eine Zombie-Instanz publizierte sogar
+            // per Heartbeat ihre ALTE FrameSlot und überschrieb die des neuen Atlas.
+            // Wir kommen hier nur hin, wenn unser getrackter Prozess tot ist → alles was
+            // jetzt noch läuft, ist per Definition eine Waise.
+            SweepOrphans();
+
             try
             {
                 var psi = new ProcessStartInfo
                 {
                     FileName = exePath,
+                    // --parent-pid: stirbt die WPF unsauber (ohne OnExit → Stop() lief
+                    // nie), beendet sich der Atlas selbst (Gürtel+Hosenträger zum
+                    // Startup-Orphan-Sweep). Muster wie CaptureHostService.
+                    Arguments = $"--parent-pid={Environment.ProcessId}",
                     UseShellExecute = false,
                     CreateNoWindow = false,
                     WorkingDirectory = Path.GetDirectoryName(exePath) ?? "",
@@ -64,6 +79,7 @@ public sealed class ElectronAtlasService
                     return false;
                 }
                 Logger.Info($"ElectronAtlasService: started, pid={_process.Id}, exe={exePath}");
+                ChildProcessJob.Assign(_process); // stirbt mit der WPF (auch bei hartem Kill)
                 return true;
             }
             catch (Exception ex)
@@ -72,6 +88,43 @@ public sealed class ElectronAtlasService
                 _process = null;
                 return false;
             }
+        }
+    }
+
+    /// <summary>
+    /// Killt verwaiste <c>BeeHive_VR_Atlas</c>-Prozesse aus einem unsauber
+    /// beendeten Vorlauf (WPF-Crash / Task-Manager / Shutdown → OnExit lief nicht
+    /// → <see cref="Stop"/> nie). NUR beim First-Instance-Start aufrufen (der
+    /// Single-Instance-Mutex garantiert dann, dass jeder vorgefundene Atlas stale
+    /// ist — unser eigener startet erst beim iRacing-Connect). Ohne diesen Sweep
+    /// bleiben Waisen „sticky": der nächste Start spawnt einen Atlas, der am
+    /// Electron-Single-Instance-Lock sofort wieder aussteigt, während die Waise
+    /// untracked weiterläuft. <see cref="Process.GetProcessesByName(string)"/>
+    /// erfasst alle Electron-Kindprozesse (gleicher Name); Kill mit
+    /// <c>entireProcessTree</c> räumt Reste weg.
+    /// </summary>
+    public void SweepOrphans()
+    {
+        Process[] found;
+        try { found = Process.GetProcessesByName("BeeHive_VR_Atlas"); }
+        catch (Exception ex)
+        {
+            Logger.Warn($"ElectronAtlasService.SweepOrphans: enum failed: {ex.Message}");
+            return;
+        }
+
+        foreach (var p in found)
+        {
+            try
+            {
+                p.Kill(entireProcessTree: true);
+                Logger.Info($"ElectronAtlasService.SweepOrphans: killed stale atlas pid={p.Id}");
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"ElectronAtlasService.SweepOrphans: kill pid={p.Id} failed: {ex.Message}");
+            }
+            finally { p.Dispose(); }
         }
     }
 
