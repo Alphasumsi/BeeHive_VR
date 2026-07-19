@@ -6,6 +6,8 @@ override_functions = [
     "xrEndFrame",                     # lazy-setup + append our quad layers
     "xrWaitFrame",                    # 25.6.2026: nur Timing (Stall-Watchdog) — Runtime-Backpressure vs iRacing-Render trennen
     "xrAttachSessionActionSets",      # piggyback our action set if iRacing ever attaches (defensive)
+    "xrPollEvent",                    # 18.7.2026: Session-Ende FRUEH erkennen (STOPPING/EXITING) → Stall-Watchdog stummschalten
+    "xrRequestExitSession",           # dito, app-initiierter Ausstieg (noch frueher)
 ]
 
 # Functions our layer invokes against the runtime (beyond the bare loader set).

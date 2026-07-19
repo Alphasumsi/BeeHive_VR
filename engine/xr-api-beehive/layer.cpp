@@ -159,6 +159,10 @@ void main(uint2 tid : SV_DispatchThreadID)
             const XrResult result = OpenXrApi::xrCreateSession(instance, createInfo, session);
             if (XR_FAILED(result) || m_bypassApiLayer) return result;
 
+            // Neue Session → Stall-Watchdog wieder scharf (Flag vom letzten Ausstieg
+            // zurücksetzen, sonst bliebe er für den Rest des Prozesses stumm).
+            s_sessionEnding.store(false, std::memory_order_relaxed);
+
             const XrBaseInStructure* entry = reinterpret_cast<const XrBaseInStructure*>(createInfo->next);
             while (entry) {
                 if (entry->type == XR_TYPE_GRAPHICS_BINDING_D3D11_KHR) {
@@ -177,6 +181,34 @@ void main(uint2 tid : SV_DispatchThreadID)
             m_session = *session;
             Log("xrCreateSession: captured app D3D11 device, awaiting first xrEndFrame for setup\n");
             return result;
+        }
+
+        // ---------- xrPollEvent: Session-Ende FRÜH erkennen ---------------------
+        // Reiner Pass-through; wir lesen nur den Session-State mit. STOPPING kommt
+        // von der Runtime, BEVOR die App aufhört zu rendern → früheste verlässliche
+        // Stelle, um den Stall-Watchdog stummzuschalten (s. StallReport).
+        XrResult xrPollEvent(XrInstance instance, XrEventDataBuffer* eventData) override {
+            const XrResult res = OpenXrApi::xrPollEvent(instance, eventData);
+            if (res == XR_SUCCESS && eventData &&
+                eventData->type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
+                const auto* ev =
+                    reinterpret_cast<const XrEventDataSessionStateChanged*>(eventData);
+                if (ev->state == XR_SESSION_STATE_STOPPING ||
+                    ev->state == XR_SESSION_STATE_LOSS_PENDING ||
+                    ev->state == XR_SESSION_STATE_EXITING) {
+                    if (!s_sessionEnding.exchange(true, std::memory_order_relaxed))
+                        Log("Stall-Watchdog: Session endet (state=%d) — Stall-Reports aus\n",
+                            (int)ev->state);
+                }
+            }
+            return res;
+        }
+
+        // ---------- xrRequestExitSession: app-initiierter Ausstieg -------------
+        XrResult xrRequestExitSession(XrSession session) override {
+            if (!s_sessionEnding.exchange(true, std::memory_order_relaxed))
+                Log("Stall-Watchdog: xrRequestExitSession — Stall-Reports aus\n");
+            return OpenXrApi::xrRequestExitSession(session);
         }
 
         // ---------- xrDestroySession: tear down our resources ------------------
@@ -2182,7 +2214,8 @@ void main(uint2 tid : SV_DispatchThreadID)
         // verloren geht, falls iRacing nach dem Freeze neu gestartet wird. Nur
         // der Watchdog-Thread ruft das → eigener Append-Stream braucht keinen
         // Mutex (Log() selbst ist seit 25.6. ohnehin mutex-geschützt).
-        static void StallReport(const std::string& msg) {
+        // Schreibt tatsächlich. NUR aus FlushPendingStalls() aufrufen.
+        static void StallWrite(const std::string& msg) {
             Log("%s", msg.c_str());   // engine.log (Zeitstempel kommt aus InternalLog)
             try {
                 const char* lad = getenv("LOCALAPPDATA");
@@ -2201,6 +2234,39 @@ void main(uint2 tid : SV_DispatchThreadID)
             }
         }
 
+        // Meldung NICHT sofort schreiben, sondern kStallDeferNs zurückhalten.
+        //
+        // Grund (18.7.2026, gemessen): iRacing hört beim Session-Ausstieg ~1 s auf zu
+        // rendern, BEVOR es xrRequestExitSession ruft — der Watchdog (1-s-Schwelle)
+        // gewinnt dieses Rennen und schrieb einen falschen STALL, worauf arm-trace eine
+        // nutzlose exit_*.etl sicherte und die stalls.log-Historie verfälscht wurde.
+        // Ein FRÜHERES Signal existiert nicht (STOPPING via xrPollEvent kommt noch
+        // später). Deshalb umgekehrt: sofort erkennen, aber erst nach der Karenzzeit
+        // schreiben — stellt sich derweil heraus, dass die Session endet, verwerfen wir.
+        // Kosten: der Trace-Trigger kommt ~3 s später; der GPUView-Ring (~15 s) hält den
+        // Vorlauf vor dem Freeze trotzdem locker (der ist die wertvolle Evidenz).
+        static void StallReport(const std::string& msg) {
+            if (s_sessionEnding.load(std::memory_order_relaxed)) return;
+            s_pendingStalls.push_back({NowSteadyNs() + kStallDeferNs, msg});
+        }
+
+        // Aus der Watchdog-Schleife (alle 200 ms). Einziger Aufrufer von StallWrite.
+        // Fällig gewordene Meldungen rausschreiben — es sei denn, die Session endet
+        // inzwischen, dann fliegt alles Aufgestaute weg.
+        static void FlushPendingStalls() {
+            if (s_pendingStalls.empty()) return;
+            if (s_sessionEnding.load(std::memory_order_relaxed)) {
+                s_pendingStalls.clear();
+                return;
+            }
+            const int64_t now = NowSteadyNs();
+            // Fälligkeiten sind monoton steigend → vorne abarbeiten reicht.
+            while (!s_pendingStalls.empty() && now >= s_pendingStalls.front().dueNs) {
+                StallWrite(s_pendingStalls.front().msg);
+                s_pendingStalls.pop_front();
+            }
+        }
+
         // Trennt drei Fälle anhand der Entry/Exit-Timestamps:
         //   (a) im Layer hängend  → "stuck ... in phase 'compose'/'wgc-...'" = wir
         //   (b) Downstream-Submit → phase 'downstream-submit' = Runtime/anderer Layer
@@ -2215,12 +2281,53 @@ void main(uint2 tid : SV_DispatchThreadID)
                 bool insideReported = false, noCallReported = false;
                 int64_t reportedEntry = 0;
                 int64_t noCallStartExit = 0;   // eingefrorener Exit-Stempel bei Beginn der Lücke
+                int64_t noCallLastReportNs = 0; // 12.7.: Dauer-Hänger alle 30s NEU melden
+                                                // (21:26er-Hänger lief >2,5 min mit nur EINER
+                                                // Zeile — arm-trace, das erst währenddessen
+                                                // startet, sähe sonst nie einen Trigger)
+                // STALL-SLOW (12.7.2026): die Freeze-Variante aus lauter ~600ms-Frames
+                // erzeugt KEINE Einzel-Lücke >1s → die Detektoren unten bleiben stumm
+                // (Beweis: 6s-Freeze „Cup C 1" 01:07 + Replay-Freeze 12.7. 21:18 ohne
+                // stalls.log-Eintrag). Ergänzend: Frame-RATE über 2s-Fenster messen;
+                // <5 fps im Steady-State = Freeze, auch wenn Frames weiter tröpfeln.
+                int64_t  slowWinStartNs = 0;
+                uint64_t slowWinStartFrame = 0;
+                bool     slowReported = false;
                 while (!m_stallThreadStop.load(std::memory_order_relaxed)) {
                     std::this_thread::sleep_for(milliseconds(200));
+                    // Zurückgehaltene Meldungen rausschreiben bzw. verwerfen, wenn
+                    // sich inzwischen ein Session-Ende herausgestellt hat.
+                    FlushPendingStalls();
                     const int64_t entry = m_xefEntryNs.load(std::memory_order_relaxed);
                     if (entry == 0) continue;  // noch kein Frame gesehen
                     const int64_t exit = m_xefExitNs.load(std::memory_order_relaxed);
                     const int64_t now  = NowSteadyNs();
+
+                    // STALL-SLOW: alle ~2s die Frame-Rate des Fensters bewerten.
+                    // Frame-Gate 2000 filtert die Lade-Phase (analog arm-trace.ps1).
+                    {
+                        const uint64_t fc = m_xefEntryFrame.load(std::memory_order_relaxed);
+                        if (slowWinStartNs == 0) {
+                            slowWinStartNs = now;
+                            slowWinStartFrame = fc;
+                        } else if (now - slowWinStartNs >= 2 * kStallNs) {
+                            const uint64_t frames = fc - slowWinStartFrame;
+                            const double fps = (double)frames * 1e9 / (double)(now - slowWinStartNs);
+                            if (!slowReported && fps < 5.0 && frames > 0 && fc > 2000) {
+                                slowReported = true;
+                                StallReport(fmt::format(
+                                    "STALL-SLOW: nur {} Frames in {} ms (~{:.1f} fps) (frame #{}) "
+                                    "— Freeze-Variante ohne Einzel-Luecke >1s\n",
+                                    frames, (now - slowWinStartNs) / 1000000, fps, fc));
+                            } else if (slowReported && fps > 30.0) {
+                                slowReported = false;
+                                StallReport(fmt::format(
+                                    "STALL-SLOW: cleared (~{:.0f} fps, frame #{})\n", fps, fc));
+                            }
+                            slowWinStartNs = now;
+                            slowWinStartFrame = fc;
+                        }
+                    }
                     if (entry > exit) {
                         // Gerade INNERHALB eines xrEndFrame-Aufrufs.
                         const int64_t dur = now - entry;
@@ -2241,9 +2348,17 @@ void main(uint2 tid : SV_DispatchThreadID)
                                             m_xefEntryFrame.load(std::memory_order_relaxed)));
                         }
                         const int64_t sinceExit = now - exit;
+                        if (noCallReported && now - noCallLastReportNs > 30 * kStallNs) {
+                            noCallLastReportNs = now;
+                            StallReport(fmt::format(
+                                "STALL: STILL no xrEndFrame — hang laeuft seit {} ms (frame #{})\n",
+                                (now - noCallStartExit) / 1000000,
+                                m_xefEntryFrame.load(std::memory_order_relaxed)));
+                        }
                         if (sinceExit > kStallNs && !noCallReported) {
                             noCallReported = true;
                             noCallStartExit = exit;
+                            noCallLastReportNs = now;
                             // iRacing ruft xrEndFrame nicht → wo hängt der Render-Thread?
                             // In xrWaitFrame = Runtime (VDXR) hält ihn; sonst zwischen
                             // Wait-Return und xrEndFrame = iRacings eigener Render.
@@ -2376,6 +2491,22 @@ void main(uint2 tid : SV_DispatchThreadID)
 
         // Stall-Watchdog (25.6.2026) — s. StartStallWatchdog(). Der Render-Thread
         // schreibt nur diese atomics, der Hintergrund-Thread liest sie.
+        // 18.7.2026: true ab Session-STOPPING/EXITING (xrPollEvent) bzw.
+        // xrRequestExitSession → StallReport schweigt ab da. Verhindert falsche
+        // Freeze-Einträge in stalls.log beim normalen Ausstieg und damit die
+        // nutzlosen exit_*.etl von arm-trace. `static`, weil StallReport static ist;
+        // wird in xrCreateSession für jede neue Session zurückgesetzt.
+        static inline std::atomic<bool> s_sessionEnding{false};
+
+        // Karenzzeit für Stall-Meldungen (s. StallReport): erkennen sofort, schreiben
+        // verzögert — damit ein Session-Ausstieg, der sich erst ~1 s später als solcher
+        // zu erkennen gibt, die Meldung noch zurückziehen kann.
+        static constexpr int64_t kStallDeferNs = 3000LL * 1000 * 1000;  // 3 s
+        struct PendingStall { int64_t dueNs; std::string msg; };
+        // Nur der Watchdog-Thread fasst das an (alle StallReport-Aufrufer liegen in
+        // seiner Schleife) → kein Mutex nötig.
+        static inline std::deque<PendingStall> s_pendingStalls;
+
         std::atomic<int64_t>  m_xefEntryNs{0};   // steady_clock ns bei xrEndFrame-Entry
         std::atomic<int64_t>  m_xefExitNs{0};    // steady_clock ns bei xrEndFrame-Exit
         std::atomic<int>      m_xefPhase{0};     // XefPhase während des Calls
