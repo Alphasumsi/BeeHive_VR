@@ -79,9 +79,24 @@ const GetWindowLongPtrW = user32.func(
   'intptr_t __stdcall GetWindowLongPtrW(void* hWnd, int nIndex)');
 const SetWindowLongPtrW = user32.func(
   'intptr_t __stdcall SetWindowLongPtrW(void* hWnd, int nIndex, intptr_t dwNewLong)');
+// 18.7.2026: Billige Fenster-Zustandsabfrage statt desktopCapturer-Enumeration.
+// Trace-Befund: `getSources()` alle 3 s erzeugte einen Kernel-GPU-Burst
+// (System-Prozess ~4-5k Submissions/s, Atlas 15×) und kippte gelegentlich den
+// ganzen Adapter → Freeze. IsIconic/IsWindow kosten praktisch nichts.
+const IsIconic = user32.func('bool __stdcall IsIconic(void* hWnd)');
+const IsWindow = user32.func('bool __stdcall IsWindow(void* hWnd)');
+
 const DWMWA_CLOAK = 13;
 const GWL_EXSTYLE = -20;
 const WS_EX_TOOLWINDOW = 0x00000080;
+
+// desktopCapturer-Window-Ids haben die Form "window:<HWND>:<Z>" — daraus die
+// HWND ziehen, damit wir sie direkt per Win32 abfragen können.
+function hwndFromSourceId(sourceId: string): bigint | null {
+  const m = /^window:(\d+):/.exec(sourceId);
+  if (!m) return null;
+  try { return BigInt(m[1]); } catch { return null; }
+}
 
 function applyCloakingAndToolWindow(hwnd: bigint): void {
   // koffi 3 round-trips void* as BigInt — pass the HWND straight in.
@@ -243,7 +258,21 @@ function applyWpfSelfIconic(): void {
 // Cache-Miss rendert syncIframes ein schwarzes Placeholder-Video; sobald der
 // Refresh die ID kennt, baut die nächste syncIframes-Runde den Stream.
 const windowSourceIdByTitle = new Map<string, string>();
-let windowRefreshTimer: NodeJS.Timeout | null = null;
+// 18.7.2026: kein 3-s-getSources-Poll mehr (Freeze-Ursache, s.o.). Stattdessen ein
+// billiger IsIconic-Poll; getSources läuft nur noch ON DEMAND (unaufgelöster Titel
+// oder HWND ungültig geworden) und dann frühestens alle SOURCES_REFRESH_MIN_MS.
+let windowIconicTimer: NodeJS.Timeout | null = null;
+let lastSourcesRefreshMs = 0;
+const SOURCES_REFRESH_MIN_MS = 5000;
+// 19.7.2026: Ein Titel, der sich NIE auflösen lässt (Fenster taucht in Chromiums
+// Enumeration gar nicht auf), hielt `needResolve` dauerhaft true → getSources()
+// feuerte endlos alle 5 s = exakt der teure Burst von vorher, nur langsamer
+// getaktet (User-Symptom: Overlays stocken alle ~5 s). Deshalb Backoff:
+// bei jedem Fehlversuch verdoppeln bis SOURCES_REFRESH_MAX_MS, bei Erfolg oder
+// Layout-Wechsel zurücksetzen.
+const SOURCES_REFRESH_MAX_MS = 60000;
+let sourcesRefreshBackoffMs = SOURCES_REFRESH_MIN_MS;
+let loggedMissingKey = '';
 
 // 7.6.2026 — WPF-Self-Capture via Display-Mode + CSS-Crop. ContextMenus &
 // ComboBox-Dropdowns rendern in WPF als separate Popup-HWNDs und fehlen im
@@ -274,6 +303,7 @@ interface WpfBounds {
 let wpfBounds: WpfBounds | null = null;
 
 async function refreshWindowSources(): Promise<void> {
+  lastSourcesRefreshMs = Date.now(); // Rate-Limit-Marke (auch bei Fehlschlag)
   try {
     // Beide Types in einem Aufruf — Chromium liefert window UND screen Sources
     // im selben Result-Array, jeder mit display_id (für screen) bzw. window-
@@ -300,30 +330,46 @@ async function refreshWindowSources(): Promise<void> {
       }
     }
     if (prevKeys.size > 0) changed = true; // Fenster verschwunden
-    // C6 (5.6.2026): Iconic-Erkennung via ABSENZ aus desktopCapturer-Liste.
-    // Hintergrund: Electron-Doku — "On Windows, getSources() excludes
-    // minimized windows from the result." Damit ist die Title-Cache-Lookup
-    // unten die ganze Wahrheit: Title noch in Cache → Fenster sichtbar;
-    // Title nicht mehr in Cache → minimiert (oder geschlossen, was wir hier
-    // gleich behandeln). Spart IsIconic-Win32-Aufruf.
-    // Edge-Case: Title-Flicker (z.B. Notepad „* – …") triggert kurz
-    // false-positive iconic → 3-s-Hide-Cycle. Akzeptiert.
+
+    // 18.7.2026: Die frühere Iconic-Erkennung „via ABSENZ aus dieser Liste" ist hier
+    // RAUS — sie war der einzige Grund für den 3-s-getSources-Poll, und genau der
+    // erzeugte den Kernel-GPU-Burst, der den Adapter kippte (Trace-Beweis 18.7.).
+    // Minimiert-Status kommt jetzt aus pollWindowIconic() (IsIconic, praktisch
+    // gratis) bzw. für die WPF-Self-Quelle aus applyWpfSelfIconic(). Diese Funktion
+    // löst nur noch Titel→sourceId + Screen-Ids auf und läuft ON DEMAND.
+    // Aufräumen: iconic-Einträge von Slots, die es nicht mehr gibt.
     let iconicChanged = false;
-    const seenIconic = new Set<string>();
+    const liveIds = new Set(currentLayout.map((s) => s.id));
+    for (const id of Array.from(iconicById.keys())) {
+      if (!liveIds.has(id)) { iconicById.delete(id); iconicChanged = true; }
+    }
+
+    // Auflösungs-Status prüfen → Backoff steuern (s. SOURCES_REFRESH_MAX_MS).
+    const wantedTitles = new Set<string>();
     for (const slot of currentLayout) {
       if (slotTypeById.get(slot.id) !== 'window') continue;
-      const title = slotTargetById.get(slot.id);
-      if (!title) continue;
-      seenIconic.add(slot.id);
-      const minimized = !windowSourceIdByTitle.has(title);
-      if (iconicById.get(slot.id) !== minimized) {
-        iconicById.set(slot.id, minimized);
-        iconicChanged = true;
-      }
+      const t = slotTargetById.get(slot.id);
+      if (t) wantedTitles.add(t);
     }
-    // Slots die nicht mehr da sind aus iconicById raus.
-    for (const id of Array.from(iconicById.keys())) {
-      if (!seenIconic.has(id)) { iconicById.delete(id); iconicChanged = true; }
+    const missing = Array.from(wantedTitles).filter((t) => !windowSourceIdByTitle.has(t));
+    if (missing.length === 0) {
+      sourcesRefreshBackoffMs = SOURCES_REFRESH_MIN_MS;
+      loggedMissingKey = '';
+    } else {
+      sourcesRefreshBackoffMs = Math.min(sourcesRefreshBackoffMs * 2, SOURCES_REFRESH_MAX_MS);
+      // Diagnose (einmal je Konstellation): zeigt sofort, ob es ein Namens-Mismatch
+      // ist oder ob Chromiums Enumeration das Fenster gar nicht anbietet (sie filtert
+      // u.a. minimierte/layered/tool/cloaked Fenster). OpenKneeboard sieht solche
+      // Fenster, weil es per WGC direkt auf die HWND capturet statt zu enumerieren.
+      const key = missing.join('|');
+      if (key !== loggedMissingKey) {
+        loggedMissingKey = key;
+        atlasLog(
+          `[refreshWindowSources] NICHT aufgelöst: ${missing.map((m) => `"${m}"`).join(', ')} ` +
+          `— enumerierte Fenster (${windowSourceIdByTitle.size}): ` +
+          (Array.from(windowSourceIdByTitle.keys()).map((n) => `"${n}"`).join(', ') || '<keine>') +
+          ` — retry-Abstand jetzt ${sourcesRefreshBackoffMs} ms`);
+      }
     }
 
     if (changed || iconicChanged) {
@@ -337,10 +383,56 @@ async function refreshWindowSources(): Promise<void> {
   }
 }
 
+// 18.7.2026 — billiger Ersatz für den 3-s-getSources-Poll: fragt den Minimiert-
+// Zustand direkt per IsIconic() an der HWND ab (aus der sourceId geparst). Kostet
+// praktisch nichts und erzeugt KEINE GPU-/Kernel-Last. getSources() wird nur noch
+// angestoßen, wenn ein Titel unaufgelöst ist oder eine HWND ungültig wurde
+// (Fenster zu/neu) — und dann höchstens alle SOURCES_REFRESH_MIN_MS.
+function pollWindowIconic(): void {
+  let changed = false;
+  let needResolve = false;
+  for (const slot of currentLayout) {
+    if (slotTypeById.get(slot.id) !== 'window') continue;
+    const title = slotTargetById.get(slot.id);
+    if (!title) continue;
+    // WPF-Self-Quelle: iconic kommt aus wpfBounds (applyWpfSelfIconic) — nicht anfassen.
+    if (title === WPF_SELF_TITLE) continue;
+
+    const sourceId = windowSourceIdByTitle.get(title);
+    const hwnd = sourceId ? hwndFromSourceId(sourceId) : null;
+    if (hwnd == null) { needResolve = true; continue; }
+
+    if (!IsWindow(hwnd)) {
+      // Fenster geschlossen/neu → sourceId ist stale, muss neu aufgelöst werden.
+      windowSourceIdByTitle.delete(title);
+      needResolve = true;
+      if (iconicById.get(slot.id) !== true) { iconicById.set(slot.id, true); changed = true; }
+      continue;
+    }
+    const minimized = !!IsIconic(hwnd);
+    if (iconicById.get(slot.id) !== minimized) {
+      iconicById.set(slot.id, minimized);
+      changed = true;
+    }
+  }
+  if (changed) { applyEffectiveVisibility(); republish(); syncIframes(); }
+  if (needResolve && Date.now() - lastSourcesRefreshMs >= sourcesRefreshBackoffMs) {
+    void refreshWindowSources();
+  }
+}
+
 function startWindowSourceRefresh(): void {
-  if (windowRefreshTimer) return;
-  void refreshWindowSources();
-  windowRefreshTimer = setInterval(() => { void refreshWindowSources(); }, 3000);
+  if (windowIconicTimer) return;
+  void refreshWindowSources();                              // einmalig auflösen
+  windowIconicTimer = setInterval(pollWindowIconic, 1000);  // danach nur noch billig
+}
+
+// Gegenstück (15.7.2026): ohne Window-Capture-Quelle im Layout ist die 3-s-
+// desktopCapturer.getSources()-Enumeration reine Verschwendung — und im OSR-Modus
+// stallt sie den Paint sichtbar (~alle 3 s kurzes Overlay-Hängen). Der Timer wurde
+// bisher gestartet (bei erster Window-Quelle) aber NIE gestoppt → lief endlos weiter.
+function stopWindowSourceRefresh(): void {
+  if (windowIconicTimer) { clearInterval(windowIconicTimer); windowIconicTimer = null; }
 }
 
 // Phase 3: aktuell gehoveretem/grabbed-Id aus dem Layer (kommt via PlaceOut).
@@ -578,7 +670,16 @@ function applyWpfLayout(quads: AtlasQuadFromWpf[]): void {
   // C6: Refresh-Loop für Window-Sources nur starten wenn mindestens eine
   // Window-Source aktiv ist. Spart die desktopCapturer-Abfrage solange nur
   // Browser-Sources im Layout sind.
-  if (quads.some(q => q.type === 'window')) startWindowSourceRefresh();
+  if (quads.some(q => q.type === 'window')) {
+    // Layout-Wechsel: Backoff zurücksetzen, damit neu hinzugekommene Titel zügig
+    // versucht werden. Bewusst KEIN sofortiges getSources() hier — applyWpfLayout
+    // kommt beim Konfigurieren in Bursts (9 Pushes in 0,7 s beobachtet), das würde
+    // genau die teuren Enumerationen auslösen, die wir loswerden wollen. Der 1-s-Poll
+    // holt es innerhalb der Backoff-Zeit nach.
+    sourcesRefreshBackoffMs = SOURCES_REFRESH_MIN_MS;
+    loggedMissingKey = '';
+    startWindowSourceRefresh();
+  } else stopWindowSourceRefresh();
 
   console.log(`[main] WPF layout applied: ${quads.length} quad(s), live=${currentLayout.length}, repack=${repack}`);
   republish();
