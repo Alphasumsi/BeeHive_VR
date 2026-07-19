@@ -57,6 +57,7 @@ function atlasLog(msg: string): void {
   console.log(msg);
 }
 import { sharedFrame, tryAcquireSingleInstance, FramePublish, QuadDesc } from './ipc/shared-frame';
+import { atlasTexIn } from './ipc/atlas-texin';
 import { wpfLink, AtlasQuadFromWpf } from './ipc/wpf-link';
 import { placeOut, PlaceUpdate } from './ipc/place-out';
 
@@ -139,6 +140,17 @@ const ATLAS_FORMAT_DXGI = 28; // DXGI_FORMAT_R8G8B8A8_UNORM
 // FrameSlot publiziert hat — kein Schaden wenn wir hier mit 256×256 starten.
 let atlasWidth  = 256;
 let atlasHeight = 256;
+
+// D2 (OSR-Pivot): OSR (offscreen+useSharedTexture) ist jetzt DEFAULT (15.7.2026).
+// Der Atlas rendert ohne sichtbares Fenster; setFrameRate deckelt den Compositor
+// (BEEHIVE_ATLAS_FPS, Default 30, wie C's Boden). Kill-Switch: BEEHIVE_ATLAS_OSR=0
+// → zurück auf den alten WGC-Fenster-Pfad (bleibt für Window-Capture + Fallback).
+// Nur der Wert "0" schaltet ab; unset oder alles andere = OSR.
+const OSR_MODE = process.env.BEEHIVE_ATLAS_OSR !== '0';
+const ATLAS_FPS = (() => {
+  const n = parseInt(process.env.BEEHIVE_ATLAS_FPS || '', 10);
+  return Number.isFinite(n) && n > 0 ? n : 30;
+})();
 
 // Packer-Konfig: Shelf-Packing wickelt nach PACKER_MAX_WIDTH um. 2048 px ist
 // genug für 3-4 typische Widgets (~600 px) nebeneinander; bei mehr Sources
@@ -409,7 +421,11 @@ let atlasPageReady = false;
 let currentMasterVisible = true;
 
 function republish(): void {
-  if (currentHwnd === 0n) return;
+  // WGC: erst publizieren wenn die HWND bekannt ist (vorher kann der Layer/Helper
+  // eh nichts capturen). OSR: es GIBT keine HWND — trotzdem publizieren, denn
+  // FrameSlot trägt die Quads/Posen (Bild kommt separat über AtlasTexIn). Ohne das
+  // bekämen capture-host + Layer im OSR-Modus nie Quads → keine Overlays.
+  if (!OSR_MODE && currentHwnd === 0n) return;
   const payload: FramePublish = {
     hwnd:          currentHwnd,
     width:         atlasWidth,
@@ -845,6 +861,84 @@ function startLowPriority(): void {
   lowPriorityTimer = setInterval(applyLowPriority, 5000);
 }
 
+// D2 Phase 1 — OSR-Capture: publiziert pro paint den Shared-Texture-Handle an den
+// capture-host (Local\BeeHiveVR_AtlasTexIn) und verwaltet den Textur-Lifecycle.
+// Chromium hat einen 10er-Frame-Pool; wir halten je Textur bis der capture-host sie
+// per consumedFrameCounter quittiert, dann release(). Safety-Valve OSR_MAX_HOLD gegen
+// Pool-Erschöpfung falls der capture-host lahmt/tot ist (dann Frames droppen — besser
+// als Chromiums Painting zu stallen).
+const OSR_MAX_HOLD = 3;
+function setupOsrCapture(win: BrowserWindow): void {
+  const held = new Map<bigint, { release: () => void }>();
+  let frameCounter = 0n;
+  let firstPaintLogged = false;
+  let paintCount = 0;
+  let lastRateLog = Date.now();
+  atlasLog(`[osr] Capture aktiv — publiziere an Local\\BeeHiveVR_AtlasTexIn, Deckel ${ATLAS_FPS} fps`);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  win.webContents.on('paint', (e: any) => {
+    const tex = e && e.texture;
+    if (!tex) return;
+    const info = tex.textureInfo;
+    const nt = info && info.handle ? info.handle.ntHandle : undefined;
+    if (!Buffer.isBuffer(nt) || nt.length < 8) {
+      // Kein brauchbarer Handle → sofort freigeben, nicht halten.
+      try { tex.release(); } catch { /* ignore */ }
+      return;
+    }
+    if (!firstPaintLogged) {
+      firstPaintLogged = true;
+      atlasLog('[osr] FIRST paint — pixelFormat=' + info.pixelFormat +
+        ' codedSize=' + JSON.stringify(info.codedSize) +
+        ' visibleRect=' + JSON.stringify(info.visibleRect) +
+        ' ntHandle.len=' + nt.length);
+    }
+    frameCounter++;
+    const fmt = info.pixelFormat === 'rgba' ? 1 : info.pixelFormat === 'rgbaf16' ? 2 : 0;
+    const cs = info.codedSize || { width: 0, height: 0 };
+    const vr = info.visibleRect || { x: 0, y: 0, width: cs.width, height: cs.height };
+    try {
+      atlasTexIn.publish({
+        ntHandle:     nt.readBigUInt64LE(0),
+        atlasPid:     process.pid,
+        pixelFormat:  fmt,
+        frameCounter,
+        codedWidth:   cs.width,
+        codedHeight:  cs.height,
+        visRectX:     vr.x, visRectY: vr.y, visRectW: vr.width, visRectH: vr.height,
+      });
+    } catch (err) {
+      atlasLog('[osr] publish error: ' + String(err));
+      try { tex.release(); } catch { /* ignore */ }
+      return;
+    }
+    held.set(frameCounter, tex);
+
+    // Vom capture-host bereits kopierte Frames freigeben.
+    const consumed = atlasTexIn.readConsumed();
+    for (const [fc, t] of held) {
+      if (fc <= consumed) { try { t.release(); } catch { /* ignore */ } held.delete(fc); }
+    }
+    // Safety-Valve: nie den 10er-Pool erschöpfen. capture-host lahm/tot → ältesten
+    // droppen. Der capture-host konsumiert immer den NEUESTEN Handle (höchster
+    // frameCounter) → der wird nie gedroppt; nur zurückgestaute Alte.
+    while (held.size > OSR_MAX_HOLD) {
+      const oldest = held.keys().next().value as bigint;
+      const t = held.get(oldest);
+      held.delete(oldest);
+      try { t?.release(); } catch { /* ignore */ }
+    }
+
+    paintCount++;
+    const now = Date.now();
+    if (now - lastRateLog >= 5000) {
+      atlasLog(`[osr] paints/s≈${Math.round(paintCount / 5)} held=${held.size} consumed=${consumed}`);
+      paintCount = 0;
+      lastRateLog = now;
+    }
+  });
+}
+
 function createCapturedWindow() {
   const win = new BrowserWindow({
     width: atlasWidth,
@@ -856,7 +950,7 @@ function createCapturedWindow() {
     // kommt im nächsten Schritt (Cloak alleine, WS_EX_LAYERED, o.ä.).
     x: 100,
     y: 100,
-    show: true,
+    show: !OSR_MODE,
     // Nie in der Windows-Taskleiste auftauchen (auch nicht aktiv). Als
     // Konstruktor-Option greift es beim Erstellen, bevor Windows einen Taskbar-
     // Button anlegt — verhindert sowohl das aktive Icon als auch den Ghost nach
@@ -875,11 +969,12 @@ function createCapturedWindow() {
     // Compute-Shader im Layer schleift Alpha 1:1 durch (kein Chroma-Key mehr).
     transparent: true,
     backgroundColor: '#00000000',
-    webPreferences: {
-      backgroundThrottling: false,
-    },
+    webPreferences: OSR_MODE
+      ? { backgroundThrottling: false, offscreen: { useSharedTexture: true } }
+      : { backgroundThrottling: false },
   });
   atlasWindow = win;
+  if (OSR_MODE) setupOsrCapture(win);
   // ⚠ Temporärer Debug-Hebel (3.6.2026): DevTools öffnen wenn env-var gesetzt.
   // Atlas-Window selbst ist off-screen (Alpha-Pfad), DevTools-Fenster ist sichtbar →
   // erlaubt Console + Network + DOM-Inspection.
@@ -901,6 +996,29 @@ function createCapturedWindow() {
     atlasLog('[did-finish-load] DOM ready');
     // Falls in der Zwischenzeit schon Layout-Pushes kamen, jetzt nachholen.
     syncIframes();
+    if (OSR_MODE) {
+      // OSR (D2): kein HWND/Cloak — der Bildinhalt kommt per paint-Event als
+      // Shared-Texture (setupOsrSmoke). Hier nur den setFrameRate-Deckel scharf
+      // schalten (heute im Fensterpfad ein No-Op, in OSR funktional).
+      try {
+        win.webContents.setFrameRate(ATLAS_FPS);
+        atlasLog(`[osr] setFrameRate(${ATLAS_FPS}) gesetzt`);
+      } catch (e) { atlasLog('[osr] setFrameRate failed: ' + String(e)); }
+      // Phase-0-Deckel-Beweis: erzwingt kontinuierliche Repaints (rAF), damit
+      // paints/s messbar wird auch ohne animierte Widgets. Nur mit Env-Flag.
+      if (process.env.BEEHIVE_OSR_FORCEPAINT) {
+        win.webContents.executeJavaScript(
+          "(function(){var n=0,d=document.createElement('div');" +
+          "d.style.cssText='position:fixed;top:0;left:0;width:10px;height:10px;" +
+          "background:red;z-index:2147483647';document.body.appendChild(d);" +
+          "(function loop(){n=(n+1)%80;d.style.transform='translateX('+n+'px)';" +
+          "requestAnimationFrame(loop);})();})();"
+        ).catch(() => { /* ignore */ });
+        atlasLog('[osr] FORCEPAINT aktiv (rAF-Animation injiziert)');
+      }
+      republish();
+      return;
+    }
     const buf = win.getNativeWindowHandle();
     if (buf.length < 8) {
       console.error('[main] getNativeWindowHandle: expected at least 8 bytes, got', buf.length);
@@ -944,6 +1062,14 @@ app.whenReady().then(() => {
     console.error('[main] failed to open shared frame channel:', e);
     app.quit();
     return;
+  }
+  if (OSR_MODE) {
+    try {
+      atlasTexIn.open();
+      atlasLog('[osr] AtlasTexIn channel opened (Local\\BeeHiveVR_AtlasTexIn)');
+    } catch (e) {
+      atlasLog('[osr] failed to open AtlasTexIn channel: ' + String(e));
+    }
   }
 
   // WPF pipe — non-blocking. If WPF is not running yet, the client will
@@ -1015,7 +1141,7 @@ app.whenReady().then(() => {
   // ist 120 Frames (≈1.3 s) — kleinerer Heartbeat-Tick reduziert Trip-Risiko
   // bei kurzen OS-Stalls deutlich (16.6.2026, User-Beobachtung).
   setInterval(() => {
-    if (currentHwnd !== 0n) republish();
+    if (OSR_MODE || currentHwnd !== 0n) republish();
   }, 100);
 
   // Place-in-VR: layer publishes pose updates while a controller-grab is
@@ -1064,6 +1190,7 @@ app.on('before-quit', () => {
   try { placeOut.stop(); } catch { /* ignore */ }
   try { wpfLink.stop(); } catch { /* ignore */ }
   try { sharedFrame.close(); } catch { /* ignore */ }
+  try { atlasTexIn.close(); } catch { /* ignore */ }
 });
 
 app.on('window-all-closed', () => app.quit());

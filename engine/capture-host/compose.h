@@ -103,11 +103,26 @@ void main(uint2 tid : SV_DispatchThreadID)
                  uint32_t texW, uint32_t texH) {
             using namespace beehive::shm;
 
-            // Source-SRV nach Pointer cachen (WGC rotiert Pool-Surfaces).
+            // Source-SRV nach Pointer cachen (WGC rotiert Pool-Surfaces; OSR öffnet je
+            // neuem Frame eine neue Textur → Cache-Miss + Neu-Erzeugung, billig).
             if (sourceTex != m_srcCachedPtr) {
                 m_srcSRV.Reset();
+                // SRV-Format aus der Quelle ableiten: WGC liefert R8G8B8A8_UNORM, OSR
+                // (Chromium) B8G8R8A8_UNORM (bgra) — die GPU swizzelt beide korrekt auf
+                // logisches RGBA im Shader. UNORM erzwingen (Byte-Passthrough, kein sRGB-
+                // Resample); der Layer reinterpretiert später UNORM→UNORM_SRGB.
+                D3D11_TEXTURE2D_DESC td{};
+                sourceTex->GetDesc(&td);
+                DXGI_FORMAT srvFmt = td.Format;
+                switch (srvFmt) {
+                    case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+                    case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB: srvFmt = DXGI_FORMAT_B8G8R8A8_UNORM; break;
+                    case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+                    case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: srvFmt = DXGI_FORMAT_R8G8B8A8_UNORM; break;
+                    default: break;
+                }
                 D3D11_SHADER_RESOURCE_VIEW_DESC srvd{};
-                srvd.Format              = DXGI_FORMAT_R8G8B8A8_UNORM;
+                srvd.Format              = srvFmt;
                 srvd.ViewDimension       = D3D11_SRV_DIMENSION_TEXTURE2D;
                 srvd.Texture2D.MipLevels = 1;
                 if (FAILED(m_device->CreateShaderResourceView(sourceTex, &srvd, &m_srcSRV)))

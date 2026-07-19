@@ -655,8 +655,12 @@ void main(uint2 tid : SV_DispatchThreadID)
             // (b) Peek at the slot. If Electron hasn't written yet, just wait.
             FrameSlot slot{};
             memcpy(&slot, m_mapView, sizeof(slot));
-            if (slot.generation == 0 || slot.producerPid == 0 ||
-                slot.hwnd == 0 || !slot.width || !slot.height) {
+            // OSR (D2): kein Fenster → slot.hwnd == 0 ist GÜLTIG. hwnd nur im WGC-
+            // Modus verlangen (dort ist es das Capture-Ziel); extern/OSR nutzt TexOut,
+            // width/height/generation/pid reichen als Validität. Sonst hängt der Setup
+            // im OSR-Modus ewig auf „waiting for first valid FrameSlot".
+            if (slot.generation == 0 || slot.producerPid == 0 || !slot.width || !slot.height ||
+                (!m_externalCapture && slot.hwnd == 0)) {
                 return false;
             }
 

@@ -23,8 +23,14 @@ namespace beehive::shm {
     inline constexpr wchar_t kFrameMappingName[]     = L"Local\\BeeHiveVR_Frame";
     inline constexpr wchar_t kTexOutMappingName[]    = L"Local\\BeeHiveVR_TexOut";
     inline constexpr wchar_t kHighlightMappingName[] = L"Local\\BeeHiveVR_HL";
+    inline constexpr wchar_t kAtlasTexInMappingName[]= L"Local\\BeeHiveVR_AtlasTexIn";
 
     inline constexpr uint32_t kMaxQuads = 12;
+
+    // pixelFormat-Enum für AtlasTexIn (Electron textureInfo.pixelFormat).
+    inline constexpr uint32_t kPixBgra    = 0;  // Windows-OSR-Default (Phase 0 bestätigt)
+    inline constexpr uint32_t kPixRgba    = 1;
+    inline constexpr uint32_t kPixRgbaF16 = 2;
 
     // ---- Atlas → (Layer + Helper) ------------------------------------------------
 
@@ -99,5 +105,40 @@ namespace beehive::shm {
         uint32_t reserved[3];   // @52  → 64
     };
     static_assert(sizeof(HighlightSlot) == 64, "HighlightSlot muss 64 Bytes sein");
+
+    // ---- Atlas → capture-host (D2, OSR-Shared-Texture) ---------------------------
+    // D2 (14.7.2026): Statt WGC-Capture des Atlas-FENSTERS bekommt der capture-host
+    // die gerenderte Textur direkt aus Chromiums OSR-Pfad (useSharedTexture). Der
+    // Atlas publiziert pro paint den prozess-LOKALEN NT-Handle-Wert der Shared-Textur
+    // (Electron textureInfo.handle.ntHandle, 8 B) + Metadaten; der capture-host zieht
+    // ihn per DuplicateHandle(atlasProc→self) + OpenSharedResource1 (Richtung wg.
+    // [[project_no_process_enum_in_layer]] unkritisch — capture-host ist NICHT im
+    // iRacing-Adressraum). KEIN Keyed-Mutex bei bgra/rgba → Sync = „copy+release ASAP":
+    // der capture-host kopiert sofort in seinen Ring und meldet consumedFrameCounter
+    // zurück; erst dann gibt der Atlas die Electron-Textur frei (10er-Frame-Pool).
+    //
+    // Writer = Atlas (Seqlock über generation) für ALLE Felder AUSSER
+    // consumedFrameCounter — das schreibt ausschließlich der capture-host (einzelner
+    // 8-Byte-Store, 8-Byte-aligned → atomar auf x64; kein Seqlock nötig, Atlas liest
+    // nur monoton steigende Werte).
+
+    struct AtlasTexIn {
+        uint64_t generation;          // @0   Seqlock (Atlas) + Heartbeat
+        uint32_t atlasPid;            // @8   Atlas-PID (DuplicateHandle-Quelle + Restart)
+        uint32_t pixelFormat;         // @12  kPixBgra|kPixRgba|kPixRgbaF16
+        uint64_t ntHandle;            // @16  NT-Handle-WERT im Atlas-Prozess (Buffer→u64)
+        uint64_t frameCounter;        // @24  monoton, +1 je publiziertem paint
+        uint32_t codedWidth;          // @32  Textur-Dimension (codedSize)
+        uint32_t codedHeight;         // @36
+        uint32_t visRectX;            // @40  visibleRect (OSR: i.d.R. voll, 0/0)
+        uint32_t visRectY;            // @44
+        uint32_t visRectW;            // @48
+        uint32_t visRectH;            // @52
+        uint64_t consumedFrameCounter;// @56  capture-host = Writer: zuletzt kopierter frameCounter
+        uint32_t reserved[16];        // @64  → 128
+    };
+    static_assert(sizeof(AtlasTexIn) == 128, "AtlasTexIn muss 128 Bytes sein (koffi-Kontrakt)");
+
+    inline constexpr uint32_t kAtlasTexInMappingSize = sizeof(AtlasTexIn); // 128
 
 } // namespace beehive::shm

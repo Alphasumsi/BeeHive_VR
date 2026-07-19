@@ -19,6 +19,7 @@
 
 #include <atomic>
 #include <cstdarg>
+#include <cstddef>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -137,6 +138,80 @@ namespace {
         std::memcpy(&a, g_hlView, sizeof(a));
         std::memcpy(&b, g_hlView, sizeof(b));
         if (a.generation == b.generation) out = a;
+    }
+
+    // ---------------- AtlasTexIn-SHM (D2, OSR-Input) -----------------------------------
+    // Atlas = Writer des Head (Seqlock); wir schreiben NUR consumedFrameCounter zurück
+    // (Release-Rückmeldung). FILE_MAP_WRITE gewährt Lesen UND Schreiben.
+
+    HANDLE g_atlasTexInMapping = nullptr;
+    uint8_t* g_atlasTexInView = nullptr;
+
+    bool TryOpenAtlasTexInShm() {
+        if (g_atlasTexInView) return true;
+        g_atlasTexInMapping = OpenFileMappingW(FILE_MAP_WRITE, FALSE, kAtlasTexInMappingName);
+        if (!g_atlasTexInMapping) return false;
+        g_atlasTexInView = static_cast<uint8_t*>(
+            MapViewOfFile(g_atlasTexInMapping, FILE_MAP_WRITE, 0, 0, sizeof(AtlasTexIn)));
+        if (!g_atlasTexInView) {
+            CloseHandle(g_atlasTexInMapping);
+            g_atlasTexInMapping = nullptr;
+            return false;
+        }
+        return true;
+    }
+
+    bool ReadAtlasTexInStable(AtlasTexIn& out) {
+        if (!g_atlasTexInView) return false;
+        AtlasTexIn a{}, b{};
+        std::memcpy(&a, g_atlasTexInView, sizeof(a));
+        std::memcpy(&b, g_atlasTexInView, sizeof(b));
+        if (a.generation != b.generation) return false;
+        out = a;
+        return true;
+    }
+
+    void WriteConsumed(uint64_t fc) {
+        if (!g_atlasTexInView) return;
+        std::memcpy(g_atlasTexInView + offsetof(AtlasTexIn, consumedFrameCounter), &fc, sizeof(fc));
+    }
+
+    // OpenProcess-Cache für die Handle-Duplikation aus dem Atlas-Prozess.
+    HANDLE g_atlasProc = nullptr;
+    uint32_t g_atlasProcPid = 0;
+
+    // Zieht den prozess-lokalen Atlas-NT-Handle per DuplicateHandle zu uns und öffnet die
+    // Shared-Textur. Richtung Atlas→capture-host ist unkritisch (wir sind NICHT im
+    // iRacing-Adressraum, anders als der Layer — [[project_no_process_enum_in_layer]]).
+    // Der duplizierte Handle wird nach OpenSharedResource1 sofort geschlossen (die
+    // Ressource hält ihre eigene Referenz).
+    bool OpenAtlasTexture(ID3D11Device5* dev, const AtlasTexIn& in,
+                          ComPtr<ID3D11Texture2D>& out) {
+        if (in.atlasPid != g_atlasProcPid || !g_atlasProc) {
+            if (g_atlasProc) { CloseHandle(g_atlasProc); g_atlasProc = nullptr; }
+            g_atlasProc = OpenProcess(PROCESS_DUP_HANDLE, FALSE, in.atlasPid);
+            g_atlasProcPid = g_atlasProc ? in.atlasPid : 0;
+            if (!g_atlasProc) {
+                Log(Fmt("OpenAtlasTexture: OpenProcess(pid=%lu) err=%lu",
+                        in.atlasPid, GetLastError()));
+                return false;
+            }
+        }
+        HANDLE local = nullptr;
+        if (!DuplicateHandle(g_atlasProc, (HANDLE)(uintptr_t)in.ntHandle, GetCurrentProcess(),
+                             &local, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+            Log(Fmt("OpenAtlasTexture: DuplicateHandle err=%lu", GetLastError()));
+            return false;
+        }
+        ComPtr<ID3D11Texture2D> tex;
+        HRESULT hr = dev->OpenSharedResource1(local, IID_PPV_ARGS(&tex));
+        CloseHandle(local);
+        if (FAILED(hr)) {
+            Log(Fmt("OpenAtlasTexture: OpenSharedResource1 hr=0x%08x", (uint32_t)hr));
+            return false;
+        }
+        out = std::move(tex);
+        return true;
     }
 
     // ---------------- TexOut-SHM (wir = einziger Writer; Seqlock-Publish) --------------
@@ -513,12 +588,21 @@ int main(int argc, char** argv) {
     ULONGLONG lastHeartbeatMs = GetTickCount64();
     uint32_t duplicatedForPid = 0;
     uint32_t duplicatedEpoch = 0;
+    uint32_t dupFailedPid = 0;
+    uint32_t dupFailedEpoch = 0;
 
     // Skip-Tick-Zustand: nur neu komponieren wenn sich compose-relevanter Input
     // geändert hat (Surface-Pointer, Quad-Payload, HL-Payload — NICHT die
     // Heartbeat-Generationen, die bumpen auch ohne Inhaltseänderung).
     ID3D11Texture2D* lastComposedSurface = nullptr;
     std::vector<uint8_t> lastComposeKey;
+
+    // D2: Input-Quelle (0=unbestimmt, 1=OSR/AtlasTexIn, 2=WGC/Fenster). Bei OSR halten
+    // wir die aktuelle Shared-Textur (osrTex) stabil bis ein neuer frameCounter kommt —
+    // so bleiben Ring-Sizing + Skip-Tick (Surface-Pointer-Vergleich) unverändert.
+    int sourceMode = 0;
+    ComPtr<ID3D11Texture2D> osrTex;
+    uint64_t osrFrame = 0;
 
     for (;;) {
         WaitForSingleObject(timer, 1000);
@@ -561,28 +645,62 @@ int main(int argc, char** argv) {
             }
         }
 
-        // (Re-)Attach bei erstem hwnd oder Atlas-Restart (hwnd/pid-Wechsel).
-        const HWND wantHwnd = (HWND)(uintptr_t)frame.hwnd;
-        if (wantHwnd != nullptr && frame.producerPid != 0 &&
-            (wantHwnd != attachedHwnd || frame.producerPid != attachedPid)) {
-            if (attachedHwnd)
-                Log(Fmt("Atlas-Wechsel erkannt (hwnd 0x%llx->0x%llx, pid %lu->%lu) -- Re-Attach",
-                        (uint64_t)(uintptr_t)attachedHwnd, frame.hwnd, attachedPid,
-                        frame.producerPid));
-            tryAttach(wantHwnd, frame.producerPid);
+        // Input-Quelle einmalig festlegen: OSR (AtlasTexIn-SHM) bevorzugt, sonst WGC.
+        if (sourceMode == 0) {
+            if (TryOpenAtlasTexInShm()) {
+                AtlasTexIn probe{};
+                if (ReadAtlasTexInStable(probe) && probe.frameCounter != 0 && probe.atlasPid != 0) {
+                    sourceMode = 1;
+                    Log("Input-Modus: OSR (Atlas useSharedTexture, AtlasTexIn-SHM)");
+                }
+            }
+            if (sourceMode == 0 && frame.hwnd != 0) {
+                sourceMode = 2;
+                Log("Input-Modus: WGC (Atlas-Fenster)");
+            }
+            if (sourceMode == 0) continue; // Atlas hat noch nichts publiziert
         }
-        if (!capture) continue;
 
         ID3D11Texture2D* surface = nullptr;
-        try {
-            surface = capture->getSurface();
-        } catch (const winrt::hresult_error& e) {
-            Log(Fmt("getSurface FEHLER hr=0x%08x -- Capture-Reset", (uint32_t)e.code().value));
-            capture.reset();
-            attachedHwnd = nullptr;
-            continue;
+        if (sourceMode == 1) {
+            // OSR: neuen Frame aus AtlasTexIn öffnen; aktuelle Textur halten (stabil bis
+            // neuer frameCounter). consumed = frameCounter-1 → Atlas gibt Ältere frei,
+            // hält die aktuelle → Content bleibt gültig für Recompose-auf-Key-Change.
+            AtlasTexIn ati{};
+            if (ReadAtlasTexInStable(ati) && ati.atlasPid != 0 && ati.frameCounter != 0 &&
+                ati.frameCounter != osrFrame) {
+                ComPtr<ID3D11Texture2D> t;
+                if (OpenAtlasTexture(device5.Get(), ati, t)) {
+                    osrTex = std::move(t);
+                    osrFrame = ati.frameCounter;
+                    WriteConsumed(ati.frameCounter - 1);
+                }
+            }
+            surface = osrTex.Get();
+            if (!surface) continue; // noch kein Frame geöffnet
+        } else {
+            // WGC (bestehend): Re-Attach bei erstem hwnd oder Atlas-Restart (hwnd/pid-Wechsel).
+            const HWND wantHwnd = (HWND)(uintptr_t)frame.hwnd;
+            if (wantHwnd != nullptr && frame.producerPid != 0 &&
+                (wantHwnd != attachedHwnd || frame.producerPid != attachedPid)) {
+                if (attachedHwnd)
+                    Log(Fmt("Atlas-Wechsel erkannt (hwnd 0x%llx->0x%llx, pid %lu->%lu) -- Re-Attach",
+                            (uint64_t)(uintptr_t)attachedHwnd, frame.hwnd, attachedPid,
+                            frame.producerPid));
+                tryAttach(wantHwnd, frame.producerPid);
+            }
+            if (!capture) continue;
+
+            try {
+                surface = capture->getSurface();
+            } catch (const winrt::hresult_error& e) {
+                Log(Fmt("getSurface FEHLER hr=0x%08x -- Capture-Reset", (uint32_t)e.code().value));
+                capture.reset();
+                attachedHwnd = nullptr;
+                continue;
+            }
+            if (!surface) continue;
         }
-        if (!surface) continue;
 
         // Ring an WGC-Surface-Größe koppeln (Atlas-Resize → neue Surface-Größe →
         // texEpoch++ + neue Handles; der Layer erkennt den Epoch-Wechsel und
@@ -612,14 +730,21 @@ int main(int argc, char** argv) {
         ReadHlStable(hl);
 
         // Handle-Duplikation in den Zielprozess, sobald layerPid bekannt (oder bei
-        // Epoch-/Pid-Wechsel erneut).
+        // Epoch-/Pid-Wechsel erneut). Fehlschläge (z.B. tote PID im HL-Block nach
+        // iRacing-Exit → OpenProcess err=87) NICHT im Tick-Takt wiederholen — die
+        // (pid,epoch)-Kombination merken und erst bei Wechsel neu versuchen
+        // (Log-Spam-Bug 11.7.).
         if (hl.layerPid != 0 &&
-            (hl.layerPid != duplicatedForPid || g_texOut.texEpoch != duplicatedEpoch)) {
+            (hl.layerPid != duplicatedForPid || g_texOut.texEpoch != duplicatedEpoch) &&
+            (hl.layerPid != dupFailedPid || g_texOut.texEpoch != dupFailedEpoch)) {
             if (DuplicateIntoTarget(ring, fenceLocalHandle, hl.layerPid)) {
                 duplicatedForPid = hl.layerPid;
                 duplicatedEpoch = g_texOut.texEpoch;
                 Log(Fmt("Handles dupliziert in Zielprozess pid=%lu (epoch=%u)",
                         hl.layerPid, g_texOut.texEpoch));
+            } else {
+                dupFailedPid = hl.layerPid;
+                dupFailedEpoch = g_texOut.texEpoch;
             }
         }
 
