@@ -15,7 +15,7 @@
 // unchanged so we can roll back without recompiling the layer. Renamed in
 // step 3 after the visual proof.
 
-import { app, BrowserWindow, desktopCapturer, screen as electronScreen } from 'electron';
+import { app, BrowserWindow, desktopCapturer, powerSaveBlocker, screen as electronScreen } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -106,9 +106,17 @@ if (started) app.quit();
 // gesamten BeeHive_VR_Atlas-Prozess als Background → setInterval-Timer
 // gestreckt, F5-Heartbeat zu selten → Watchdog trippt grundlos. Diese
 // Switches halten den Main-Process-Timer und Renderer auf Vordergrund-Niveau.
-app.commandLine.appendSwitch('disable-background-timer-throttling');
-app.commandLine.appendSwitch('disable-renderer-backgrounding');
-app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+// 13.7.2026 — SWITCHES-ROLLBACK-EXPERIMENT (Freeze-Diagnose): Die 3 Switches
+// nahmen Chromium ALLE Bremsen — Hauptverdächtiger als Verstärker der gemessenen
+// Atlas-Eruptionen (10-30x Submission-Stürme → DWM-Sturm → adapter-weiter
+// WDDM-Stall; Freezes begannen zeitgleich mit den Switches, 16.6.; der A/B am
+// 1.7. zeigte ohne Switches seltenere Freezes). Ersatz fürs Heartbeat-Problem
+// (der Grund für die Switches): powerSaveBlocker unten in app.whenReady() —
+// verhindert gezielt die App-Drosselung, ohne Chromiums Render-Bremsen global
+// zu lösen. webPreferences.backgroundThrottling:false am BrowserWindow bleibt
+// (Widget-Renderer laufen weiter). Falls F5-Watchdog wieder grundlos trippt
+// (alle Overlays blinken gleichzeitig weg): Heartbeat-Härtung nachlegen,
+// NICHT die Switches zurückholen.
 
 // Two layers of single-instance enforcement:
 // 1. Electron's app-level lock (handles the "user double-clicked the shortcut" case)
@@ -923,6 +931,12 @@ function createCapturedWindow() {
 
 app.whenReady().then(() => {
   console.log('[main] electron', process.versions.electron, 'chrome', process.versions.chrome);
+
+  // 13.7.2026: Ersatz für die entfernten Anti-Throttling-Switches (s.o.):
+  // hält Timer/Heartbeat am Leben wenn WPF minimiert + Atlas cloaked ist,
+  // ohne Chromiums Render-Drosselung global abzuschalten.
+  const psbId = powerSaveBlocker.start('prevent-app-suspension');
+  atlasLog(`[main] powerSaveBlocker aktiv (id=${psbId}, prevent-app-suspension)`);
   try {
     sharedFrame.open();
     console.log('[main] shared frame channel opened (Local\\BeeHiveVR_Frame)');
