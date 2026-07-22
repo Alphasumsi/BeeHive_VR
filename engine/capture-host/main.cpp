@@ -709,32 +709,6 @@ int main(int argc, char** argv) {
     Log(Fmt("C: Capture-Throttle=%d Hz, C2: DWM-MinUpdateInterval=%d Hz, Compose-Tick=%d Hz",
             captureHz, dwmHz, composeHz));
 
-    std::unique_ptr<openxr_api_layer::capture::ICaptureWindow> capture;
-    HWND attachedHwnd = nullptr;
-    uint32_t attachedPid = 0;
-
-    auto tryAttach = [&](HWND hwnd, uint32_t pid) {
-        capture.reset();
-        compose.invalidateSourceCache();
-        try {
-            capture = std::make_unique<openxr_api_layer::capture::CaptureWindowWinRT>(
-                device.Get(), hwnd);
-            capture->setMinPullIntervalNs(minPullNs);
-            if (!capture->setMinUpdateIntervalNs(minUpdateNs))
-                Log("C2: MinUpdateInterval nicht verfuegbar (Windows < 24H2) -- DWM-Drossel aus");
-            attachedHwnd = hwnd;
-            attachedPid = pid;
-            Log(Fmt("WGC attached: hwnd=0x%llx atlasPid=%lu", (uint64_t)(uintptr_t)hwnd, pid));
-            return true;
-        } catch (const winrt::hresult_error& e) {
-            Log(Fmt("WGC attach FEHLER hr=0x%08x (%s) -- retry naechster Tick",
-                    (uint32_t)e.code().value, winrt::to_string(e.message()).c_str()));
-            attachedHwnd = nullptr;
-            attachedPid = 0;
-            return false;
-        }
-    };
-
     HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr,
                                           CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
                                           TIMER_ALL_ACCESS);
@@ -764,9 +738,9 @@ int main(int argc, char** argv) {
     ID3D11Texture2D* lastComposedSurface = nullptr;
     std::vector<uint8_t> lastComposeKey;
 
-    // D2: Input-Quelle (0=unbestimmt, 1=OSR/AtlasTexIn, 2=WGC/Fenster). Bei OSR halten
-    // wir die aktuelle Shared-Textur (osrTex) stabil bis ein neuer frameCounter kommt —
-    // so bleiben Ring-Sizing + Skip-Tick (Surface-Pointer-Vergleich) unverändert.
+    // D2: Input-Quelle (0=unbestimmt, 1=OSR/AtlasTexIn). Wir halten die aktuelle
+    // Shared-Textur (osrTex) stabil bis ein neuer frameCounter kommt — so bleiben
+    // Ring-Sizing + Skip-Tick (Surface-Pointer-Vergleich) unverändert.
     int sourceMode = 0;
     ComPtr<ID3D11Texture2D> osrTex;
     uint64_t osrFrame = 0;
@@ -837,7 +811,8 @@ int main(int argc, char** argv) {
             }
         }
 
-        // Input-Quelle einmalig festlegen: OSR (AtlasTexIn-SHM) bevorzugt, sonst WGC.
+        // Input-Quelle einmalig festlegen: OSR (AtlasTexIn-SHM). Warten bis der Atlas
+        // den ersten Frame publiziert hat.
         if (sourceMode == 0) {
             if (TryOpenAtlasTexInShm()) {
                 AtlasTexIn probe{};
@@ -846,18 +821,14 @@ int main(int argc, char** argv) {
                     Log("Input-Modus: OSR (Atlas useSharedTexture, AtlasTexIn-SHM)");
                 }
             }
-            if (sourceMode == 0 && frame.hwnd != 0) {
-                sourceMode = 2;
-                Log("Input-Modus: WGC (Atlas-Fenster)");
-            }
             if (sourceMode == 0) continue; // Atlas hat noch nichts publiziert
         }
 
+        // OSR: neuen Frame aus AtlasTexIn öffnen; aktuelle Textur halten (stabil bis
+        // neuer frameCounter). consumed = frameCounter-1 → Atlas gibt Ältere frei,
+        // hält die aktuelle → Content bleibt gültig für Recompose-auf-Key-Change.
         ID3D11Texture2D* surface = nullptr;
-        if (sourceMode == 1) {
-            // OSR: neuen Frame aus AtlasTexIn öffnen; aktuelle Textur halten (stabil bis
-            // neuer frameCounter). consumed = frameCounter-1 → Atlas gibt Ältere frei,
-            // hält die aktuelle → Content bleibt gültig für Recompose-auf-Key-Change.
+        {
             AtlasTexIn ati{};
             if (ReadAtlasTexInStable(ati) && ati.atlasPid != 0 && ati.frameCounter != 0 &&
                 ati.frameCounter != osrFrame) {
@@ -870,28 +841,6 @@ int main(int argc, char** argv) {
             }
             surface = osrTex.Get();
             if (!surface) continue; // noch kein Frame geöffnet
-        } else {
-            // WGC (bestehend): Re-Attach bei erstem hwnd oder Atlas-Restart (hwnd/pid-Wechsel).
-            const HWND wantHwnd = (HWND)(uintptr_t)frame.hwnd;
-            if (wantHwnd != nullptr && frame.producerPid != 0 &&
-                (wantHwnd != attachedHwnd || frame.producerPid != attachedPid)) {
-                if (attachedHwnd)
-                    Log(Fmt("Atlas-Wechsel erkannt (hwnd 0x%llx->0x%llx, pid %lu->%lu) -- Re-Attach",
-                            (uint64_t)(uintptr_t)attachedHwnd, frame.hwnd, attachedPid,
-                            frame.producerPid));
-                tryAttach(wantHwnd, frame.producerPid);
-            }
-            if (!capture) continue;
-
-            try {
-                surface = capture->getSurface();
-            } catch (const winrt::hresult_error& e) {
-                Log(Fmt("getSurface FEHLER hr=0x%08x -- Capture-Reset", (uint32_t)e.code().value));
-                capture.reset();
-                attachedHwnd = nullptr;
-                continue;
-            }
-            if (!surface) continue;
         }
 
         // Ring an WGC-Surface-Größe koppeln (Atlas-Resize → neue Surface-Größe →
@@ -1033,7 +982,6 @@ int main(int argc, char** argv) {
     }
 
     CloseHandle(timer);
-    capture.reset();
     ring.reset();
     if (fenceLocalHandle) CloseHandle(fenceLocalHandle);
     if (g_frameView) UnmapViewOfFile(g_frameView);
