@@ -15,7 +15,7 @@
 // unchanged so we can roll back without recompiling the layer. Renamed in
 // step 3 after the visual proof.
 
-import { app, BrowserWindow, desktopCapturer, powerSaveBlocker, screen as electronScreen } from 'electron';
+import { app, BrowserWindow, powerSaveBlocker } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -62,58 +62,17 @@ import { winSrc } from './ipc/win-src';
 import { wpfLink, AtlasQuadFromWpf } from './ipc/wpf-link';
 import { placeOut, PlaceUpdate } from './ipc/place-out';
 
-// Win32 bindings for cloaking the atlas window. Without this Edge Overlays
-// (and other "list visible top-level windows" tools) pick up our atlas and
-// composite it a second time over the VR scene — the user sees two copies of
-// the dashies. Honey's browser-host had the same fix; see HANDOVER 11c.
-//
-// - DWMWA_CLOAK keeps DWM compositing the window (so WGC still captures it)
-//   but removes it from the desktop visually.
-// - WS_EX_TOOLWINDOW hides it from the taskbar / Alt-Tab / overlay-picker
-//   enumerations (Edge Overlays among them).
+// Win32 binding für die billige Fenster-Zustandsabfrage (IsIconic/IsWindow) im
+// nativen Window-Capture-Pfad. Der Atlas selbst rendert offscreen (OSR) und hat
+// kein Desktop-Fenster mehr — die frühere DWM-Cloak-/Tool-Window-Verkabelung
+// (gegen doppeltes Compositing durch Edge Overlays) ist damit entfallen.
 const user32 = koffi.load('user32.dll');
-const dwmapi = koffi.load('dwmapi.dll');
-const DwmSetWindowAttribute = dwmapi.func(
-  'long __stdcall DwmSetWindowAttribute(void* hwnd, uint32_t dwAttribute, ' +
-  'void* pvAttribute, uint32_t cbAttribute)');
-const GetWindowLongPtrW = user32.func(
-  'intptr_t __stdcall GetWindowLongPtrW(void* hWnd, int nIndex)');
-const SetWindowLongPtrW = user32.func(
-  'intptr_t __stdcall SetWindowLongPtrW(void* hWnd, int nIndex, intptr_t dwNewLong)');
 // 18.7.2026: Billige Fenster-Zustandsabfrage statt desktopCapturer-Enumeration.
 // Trace-Befund: `getSources()` alle 3 s erzeugte einen Kernel-GPU-Burst
 // (System-Prozess ~4-5k Submissions/s, Atlas 15×) und kippte gelegentlich den
 // ganzen Adapter → Freeze. IsIconic/IsWindow kosten praktisch nichts.
 const IsIconic = user32.func('bool __stdcall IsIconic(void* hWnd)');
 const IsWindow = user32.func('bool __stdcall IsWindow(void* hWnd)');
-
-const DWMWA_CLOAK = 13;
-const GWL_EXSTYLE = -20;
-const WS_EX_TOOLWINDOW = 0x00000080;
-
-// desktopCapturer-Window-Ids haben die Form "window:<HWND>:<Z>" — daraus die
-// HWND ziehen, damit wir sie direkt per Win32 abfragen können.
-function hwndFromSourceId(sourceId: string): bigint | null {
-  const m = /^window:(\d+):/.exec(sourceId);
-  if (!m) return null;
-  try { return BigInt(m[1]); } catch { return null; }
-}
-
-function applyCloakingAndToolWindow(hwnd: bigint): void {
-  // koffi 3 round-trips void* as BigInt — pass the HWND straight in.
-  // Tool-window first (changes extended style); cloaking is independent.
-  // GetWindowLongPtrW returns intptr_t which koffi may surface as Number
-  // (small values fit a JS double); normalise to BigInt so OR doesn't throw.
-  const exRaw = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as number | bigint;
-  const ex = typeof exRaw === 'bigint' ? exRaw : BigInt(exRaw);
-  SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex | BigInt(WS_EX_TOOLWINDOW));
-  // BOOL TRUE = 4-byte 1.
-  const cloak = Buffer.alloc(4);
-  cloak.writeUInt32LE(1, 0);
-  const hr = DwmSetWindowAttribute(hwnd, DWMWA_CLOAK, cloak, 4) as number;
-  console.log(`[main] cloak applied hr=0x${(hr >>> 0).toString(16)} ` +
-              `exStyleBefore=0x${ex.toString(16)}`);
-}
 
 if (started) app.quit();
 
@@ -157,20 +116,16 @@ const ATLAS_FORMAT_DXGI = 28; // DXGI_FORMAT_R8G8B8A8_UNORM
 let atlasWidth  = 256;
 let atlasHeight = 256;
 
-// D2 (OSR-Pivot): OSR (offscreen+useSharedTexture) ist jetzt DEFAULT (15.7.2026).
-// Der Atlas rendert ohne sichtbares Fenster; setFrameRate deckelt den Compositor
-// (BEEHIVE_ATLAS_FPS, Default 30, wie C's Boden). Kill-Switch: BEEHIVE_ATLAS_OSR=0
-// → zurück auf den alten WGC-Fenster-Pfad (bleibt für Window-Capture + Fallback).
-// Nur der Wert "0" schaltet ab; unset oder alles andere = OSR.
-const OSR_MODE = process.env.BEEHIVE_ATLAS_OSR !== '0';
-
+// D2 (OSR-Pivot): Der Atlas rendert offscreen (offscreen+useSharedTexture), ohne
+// sichtbares Fenster; setFrameRate deckelt den Compositor (BEEHIVE_ATLAS_FPS,
+// Default 30). Der alte WGC-Fenster-Pfad ist entfernt (v0.10.0-Cleanup).
+//
 // Window-Capture-Entkopplung (19.7.2026): Window-Quads werden vom capture-host
 // nativ per WGC auf die HWND gecaptured (er sieht auch Overlay-/Tool-Fenster, die
 // Chromiums desktopCapturer verschweigt) und direkt in den Ring komponiert. Der
-// Atlas baut dafür dann KEIN <video>/getUserMedia mehr — das spart den teuren
+// Atlas baut dafür KEIN <video>/getUserMedia mehr — das spart den teuren
 // getSources-Auflösungsversuch (Ruckeln beim Start) und die 18-fps-Hover-Regression.
-// Kill-Switch: BEEHIVE_WINCAP_NATIVE=0 → alter desktopCapturer-Pfad.
-const WINCAP_NATIVE = process.env.BEEHIVE_WINCAP_NATIVE !== '0';
+// Der alte desktopCapturer-Pfad ist entfernt (v0.10.0-Cleanup).
 const ATLAS_FPS = (() => {
   const n = parseInt(process.env.BEEHIVE_ATLAS_FPS || '', 10);
   return Number.isFinite(n) && n > 0 ? n : 30;
@@ -227,18 +182,6 @@ const slotTypeById = new Map<string, string>();
 // Publiziert via WinSrc-SHM an den capture-host (native WGC-Capture).
 const slotHwndById = new Map<string, bigint>();
 
-// Läuft dieses Window-Quad über den nativen WGC-Pfad (capture-host) statt über
-// Chromiums desktopCapturer? Ausnahme: die WPF-Self-Quelle im Display-Crop-Modus —
-// die MUSS beim desktopCapturer bleiben, weil sie den ganzen Monitor captured und
-// zuschneidet (WPF-Kontextmenüs/Dropdowns sind eigene Popup-HWNDs und fehlen in
-// einer reinen Fenster-Capture). Sonst würde der capture-host das Rect mit der
-// popup-losen Variante überschreiben.
-function usesNativeWindowCapture(target: string | undefined): boolean {
-  if (!WINCAP_NATIVE) return false;
-  if (WPF_SELF_DISPLAY_MODE && target === WPF_SELF_TITLE) return false;
-  return true;
-}
-
 // C6 (5.6.2026): WPF-gegebener Visible-Flag pro Slot (vor iconic-Maskierung).
 // Brauchen wir um beim de-Minimieren wieder auf den User-Wunsch zurückzukehren
 // ohne dass der WPF-Push verloren geht.
@@ -277,146 +220,26 @@ function applyWpfSelfIconic(): void {
   if (changed) { applyEffectiveVisibility(); republish(); }
 }
 
-// C6: Title → desktopCapturer-sourceId Cache. WPF schickt den Fenstertitel als
-// `target`; Electron muss daraus die opake sourceId resolven die getUserMedia
-// braucht. Periodischer Refresh (3 s) hält den Cache aktuell — Fenster die
-// neu aufgehen oder ihren Titel ändern werden automatisch eingesammelt. Bei
-// Cache-Miss rendert syncIframes ein schwarzes Placeholder-Video; sobald der
-// Refresh die ID kennt, baut die nächste syncIframes-Runde den Stream.
-const windowSourceIdByTitle = new Map<string, string>();
-// 18.7.2026: kein 3-s-getSources-Poll mehr (Freeze-Ursache, s.o.). Stattdessen ein
-// billiger IsIconic-Poll; getSources läuft nur noch ON DEMAND (unaufgelöster Titel
-// oder HWND ungültig geworden) und dann frühestens alle SOURCES_REFRESH_MIN_MS.
+// 18.7.2026: kein 3-s-getSources-Poll mehr (Freeze-Ursache, s.o.). Der Minimiert-
+// Zustand kommt jetzt aus dem billigen IsIconic-Poll (pollWindowIconic) auf der von
+// der WPF (WindowResolver) gelieferten HWND — Chromiums desktopCapturer ist raus.
 let windowIconicTimer: NodeJS.Timeout | null = null;
-let lastSourcesRefreshMs = 0;
-const SOURCES_REFRESH_MIN_MS = 5000;
-// 19.7.2026: Ein Titel, der sich NIE auflösen lässt (Fenster taucht in Chromiums
-// Enumeration gar nicht auf), hielt `needResolve` dauerhaft true → getSources()
-// feuerte endlos alle 5 s = exakt der teure Burst von vorher, nur langsamer
-// getaktet (User-Symptom: Overlays stocken alle ~5 s). Deshalb Backoff:
-// bei jedem Fehlversuch verdoppeln bis SOURCES_REFRESH_MAX_MS, bei Erfolg oder
-// Layout-Wechsel zurücksetzen.
-const SOURCES_REFRESH_MAX_MS = 60000;
-let sourcesRefreshBackoffMs = SOURCES_REFRESH_MIN_MS;
-let loggedMissingKey = '';
 
-// 7.6.2026 — WPF-Self-Capture via Display-Mode + CSS-Crop. ContextMenus &
-// ComboBox-Dropdowns rendern in WPF als separate Popup-HWNDs und fehlen im
-// Window-Capture-Mode (Chromium's window-source erfasst nur das Target-HWND).
-// Workaround: für die WPF-Self-Source (target = WPF_SELF_TITLE) schalten wir
-// auf Screen-Capture des betroffenen Monitors um und cropen das Video per
-// CSS-overflow:hidden + negative position auf den Window-Rect.
+// WPF-Self-Quelle (Iconic-Sync über wpfBounds.minimized, s. applyWpfSelfIconic).
 const WPF_SELF_TITLE = 'BeeHive VR';   // = AppEdition.ProductName
-// 17.6.2026 — Perf: Display-Capture dupliziert den GANZEN Monitor pro Frame
-// (Full-Monitor-DXGI-Duplication + CSS-Crop) → teurer Video-Decode, treibt die
-// Electron-CPU-Last hoch und hungert iRacings Render-Thread aus (~12 FPS / +22
-// CPU-Punkte in der PresentMon-Messung). Auf false fällt WPF-Self auf das
-// strukturell billigere Window-Capture zurück. Trade-off: ContextMenus/Dropdowns
-// (separate Popup-HWNDs) sind in VR wieder unsichtbar — bewusst akzeptiert.
-const WPF_SELF_DISPLAY_MODE = false;
-// Cache: Display-ID (electron.screen) → sourceId (desktopCapturer). Wird im
-// selben 3-s-Tick mit refreshWindowSources mit-aktualisiert. Display-ID ist
-// stabil über den App-Lebenszyklus, sourceId kann sich beim Monitor-
-// Reconnect ändern.
-const screenSourceIdByDisplayId = new Map<number, string>();
 // State von WPF gepusht (left/top/width/height in physical px, minimized).
-// null → Display-Crop deaktiviert (WPF noch nicht verbunden), syncIframes
-// fällt zurück auf normalen Window-Capture-Pfad.
+// minimized treibt applyWpfSelfIconic (WPF-Self-Quelle ausblenden wenn minimiert).
 interface WpfBounds {
   left: number; top: number; width: number; height: number;
   minimized: boolean;
 }
 let wpfBounds: WpfBounds | null = null;
 
-async function refreshWindowSources(): Promise<void> {
-  lastSourcesRefreshMs = Date.now(); // Rate-Limit-Marke (auch bei Fehlschlag)
-  try {
-    // Beide Types in einem Aufruf — Chromium liefert window UND screen Sources
-    // im selben Result-Array, jeder mit display_id (für screen) bzw. window-
-    // HWND-Prefix (für window).
-    const sources = await desktopCapturer.getSources({
-      types: ['window', 'screen'],
-      thumbnailSize: { width: 0, height: 0 }, // Thumbnails brauchen wir nicht
-      fetchWindowIcons: false,
-    });
-    const prevKeys = new Set(windowSourceIdByTitle.keys());
-    let changed = false;
-    windowSourceIdByTitle.clear();
-    screenSourceIdByDisplayId.clear();
-    for (const s of sources) {
-      // Window-Sources: id-Prefix "window:HWND:Z". Screen-Sources: id-Prefix
-      // "screen:DISPLAY_ID:0". display_id ist auf screen-Sources non-leer.
-      if (s.display_id) {
-        const displayId = Number(s.display_id);
-        if (Number.isFinite(displayId)) screenSourceIdByDisplayId.set(displayId, s.id);
-      } else {
-        windowSourceIdByTitle.set(s.name, s.id);
-        if (!prevKeys.has(s.name)) changed = true;
-        prevKeys.delete(s.name);
-      }
-    }
-    if (prevKeys.size > 0) changed = true; // Fenster verschwunden
-
-    // 18.7.2026: Die frühere Iconic-Erkennung „via ABSENZ aus dieser Liste" ist hier
-    // RAUS — sie war der einzige Grund für den 3-s-getSources-Poll, und genau der
-    // erzeugte den Kernel-GPU-Burst, der den Adapter kippte (Trace-Beweis 18.7.).
-    // Minimiert-Status kommt jetzt aus pollWindowIconic() (IsIconic, praktisch
-    // gratis) bzw. für die WPF-Self-Quelle aus applyWpfSelfIconic(). Diese Funktion
-    // löst nur noch Titel→sourceId + Screen-Ids auf und läuft ON DEMAND.
-    // Aufräumen: iconic-Einträge von Slots, die es nicht mehr gibt.
-    let iconicChanged = false;
-    const liveIds = new Set(currentLayout.map((s) => s.id));
-    for (const id of Array.from(iconicById.keys())) {
-      if (!liveIds.has(id)) { iconicById.delete(id); iconicChanged = true; }
-    }
-
-    // Auflösungs-Status prüfen → Backoff steuern (s. SOURCES_REFRESH_MAX_MS).
-    const wantedTitles = new Set<string>();
-    for (const slot of currentLayout) {
-      if (slotTypeById.get(slot.id) !== 'window') continue;
-      const t = slotTargetById.get(slot.id);
-      if (t) wantedTitles.add(t);
-    }
-    const missing = Array.from(wantedTitles).filter((t) => !windowSourceIdByTitle.has(t));
-    if (missing.length === 0) {
-      sourcesRefreshBackoffMs = SOURCES_REFRESH_MIN_MS;
-      loggedMissingKey = '';
-    } else {
-      sourcesRefreshBackoffMs = Math.min(sourcesRefreshBackoffMs * 2, SOURCES_REFRESH_MAX_MS);
-      // Diagnose (einmal je Konstellation): zeigt sofort, ob es ein Namens-Mismatch
-      // ist oder ob Chromiums Enumeration das Fenster gar nicht anbietet (sie filtert
-      // u.a. minimierte/layered/tool/cloaked Fenster). OpenKneeboard sieht solche
-      // Fenster, weil es per WGC direkt auf die HWND capturet statt zu enumerieren.
-      const key = missing.join('|');
-      if (key !== loggedMissingKey) {
-        loggedMissingKey = key;
-        atlasLog(
-          `[refreshWindowSources] NICHT aufgelöst: ${missing.map((m) => `"${m}"`).join(', ')} ` +
-          `— enumerierte Fenster (${windowSourceIdByTitle.size}): ` +
-          (Array.from(windowSourceIdByTitle.keys()).map((n) => `"${n}"`).join(', ') || '<keine>') +
-          ` — retry-Abstand jetzt ${sourcesRefreshBackoffMs} ms`);
-      }
-    }
-
-    if (changed || iconicChanged) {
-      atlasLog(`[refreshWindowSources] n=${sources.length}`);
-      applyEffectiveVisibility();
-      republish();
-      syncIframes();
-    }
-  } catch (e) {
-    atlasLog(`[refreshWindowSources] FAIL: ${(e as Error).message}`);
-  }
-}
-
 // 18.7.2026 — billiger Ersatz für den 3-s-getSources-Poll: fragt den Minimiert-
-// Zustand direkt per IsIconic() an der HWND ab (aus der sourceId geparst). Kostet
-// praktisch nichts und erzeugt KEINE GPU-/Kernel-Last. getSources() wird nur noch
-// angestoßen, wenn ein Titel unaufgelöst ist oder eine HWND ungültig wurde
-// (Fenster zu/neu) — und dann höchstens alle SOURCES_REFRESH_MIN_MS.
+// Zustand direkt per IsIconic() an der von der WPF (WindowResolver) gelieferten HWND
+// ab. Kostet praktisch nichts und erzeugt KEINE GPU-/Kernel-Last.
 function pollWindowIconic(): void {
   let changed = false;
-  let needResolve = false;
   for (const slot of currentLayout) {
     if (slotTypeById.get(slot.id) !== 'window') continue;
     const title = slotTargetById.get(slot.id);
@@ -424,31 +247,17 @@ function pollWindowIconic(): void {
     // WPF-Self-Quelle: iconic kommt aus wpfBounds (applyWpfSelfIconic) — nicht anfassen.
     if (title === WPF_SELF_TITLE) continue;
 
-    // Nativer Pfad: die HWND kommt fertig von der WPF (WindowResolver) im Layout-
-    // Push — kein desktopCapturer nötig. Das ist der Grund, warum getSources hier
-    // NICHT mehr angestoßen wird (war die Quelle des Ruckelns beim Start).
-    let hwnd: bigint | null;
-    if (usesNativeWindowCapture(title)) {
-      const pushed = slotHwndById.get(slot.id) ?? 0n;
-      if (pushed === 0n) {
-        // WPF findet das Fenster nicht (zu / Titel geändert) → Quad ausblenden.
-        if (iconicById.get(slot.id) !== true) { iconicById.set(slot.id, true); changed = true; }
-        continue;
-      }
-      hwnd = pushed;
-    } else {
-      const sourceId = windowSourceIdByTitle.get(title);
-      hwnd = sourceId ? hwndFromSourceId(sourceId) : null;
-      if (hwnd == null) { needResolve = true; continue; }
+    // Die HWND kommt fertig von der WPF (WindowResolver) im Layout-Push — kein
+    // desktopCapturer/getSources nötig (war die Quelle des Ruckelns beim Start).
+    const hwnd = slotHwndById.get(slot.id) ?? 0n;
+    if (hwnd === 0n) {
+      // WPF findet das Fenster nicht (zu / Titel geändert) → Quad ausblenden.
+      if (iconicById.get(slot.id) !== true) { iconicById.set(slot.id, true); changed = true; }
+      continue;
     }
 
     if (!IsWindow(hwnd)) {
-      // Fenster geschlossen/neu. Im nativen Pfad löst die WPF neu auf (2-s-Timer),
-      // im Legacy-Pfad brauchen wir eine frische sourceId.
-      if (!usesNativeWindowCapture(title)) {
-        windowSourceIdByTitle.delete(title);
-        needResolve = true;
-      }
+      // Fenster geschlossen/neu. Die WPF löst per 2-s-Timer neu auf.
       if (iconicById.get(slot.id) !== true) { iconicById.set(slot.id, true); changed = true; }
       continue;
     }
@@ -459,21 +268,15 @@ function pollWindowIconic(): void {
     }
   }
   if (changed) { applyEffectiveVisibility(); republish(); syncIframes(); }
-  if (needResolve && Date.now() - lastSourcesRefreshMs >= sourcesRefreshBackoffMs) {
-    void refreshWindowSources();
-  }
 }
 
 function startWindowSourceRefresh(): void {
   if (windowIconicTimer) return;
-  void refreshWindowSources();                              // einmalig auflösen
-  windowIconicTimer = setInterval(pollWindowIconic, 1000);  // danach nur noch billig
+  windowIconicTimer = setInterval(pollWindowIconic, 1000);
 }
 
-// Gegenstück (15.7.2026): ohne Window-Capture-Quelle im Layout ist die 3-s-
-// desktopCapturer.getSources()-Enumeration reine Verschwendung — und im OSR-Modus
-// stallt sie den Paint sichtbar (~alle 3 s kurzes Overlay-Hängen). Der Timer wurde
-// bisher gestartet (bei erster Window-Quelle) aber NIE gestoppt → lief endlos weiter.
+// Gegenstück (15.7.2026): den IsIconic-Poll wieder stoppen, sobald keine
+// Window-Quelle mehr im Layout ist (sonst liefe der Timer endlos weiter).
 function stopWindowSourceRefresh(): void {
   if (windowIconicTimer) { clearInterval(windowIconicTimer); windowIconicTimer = null; }
 }
@@ -491,53 +294,6 @@ let lastSyncedDomKey = '';
 // dürfen die rectX/Y/W/H NICHT anfassen, sonst stretcht der Atlas pro Frame.
 const currentRectWishById = new Map<string, { w: number; h: number }>();
 
-// 7.6.2026 — WPF-Self-Source Display-Lookup. Sucht aus electron.screen den
-// Display dessen physische Bounds den WPF-Window-Rect enthalten. Liefert
-// Screen-SourceId + Crop-Parameter zurück (Monitor-Größe in physical px =
-// MediaStream-Auflösung; Crop-Offset = WPF-Position relativ zum Monitor).
-// null → kein Display gefunden (z.B. WPF noch nicht-verbunden, oder
-// Monitor-Disconnect).
-interface WpfCrop {
-  sourceId: string;
-  monitorW: number;   // physical px = MediaStream width
-  monitorH: number;   // physical px = MediaStream height
-  cropX: number;      // physical px relative to monitor topleft
-  cropY: number;
-  cropW: number;      // physical px = panel-size = wpfBounds.width
-  cropH: number;
-}
-function resolveWpfCrop(): WpfCrop | null {
-  if (!wpfBounds || wpfBounds.minimized) return null;
-  if (wpfBounds.width <= 0 || wpfBounds.height <= 0) return null;
-  const displays = electronScreen.getAllDisplays();
-  for (const d of displays) {
-    // electron.screen liefert bounds + scaleFactor in DIPs. WPF schickt
-    // physical px (GetWindowRect ist DPI-aware). Konvertieren wir hier.
-    const sf = d.scaleFactor || 1;
-    const physLeft = Math.round(d.bounds.x * sf);
-    const physTop  = Math.round(d.bounds.y * sf);
-    const physW    = Math.round(d.bounds.width  * sf);
-    const physH    = Math.round(d.bounds.height * sf);
-    // TopLeft des WPF-Fensters muss in diesem Monitor liegen — Multi-Monitor-
-    // Spanning ist sehr selten; Dominanz-Monitor reicht.
-    if (wpfBounds.left >= physLeft && wpfBounds.left < physLeft + physW
-        && wpfBounds.top >= physTop && wpfBounds.top < physTop + physH) {
-      const sourceId = screenSourceIdByDisplayId.get(d.id);
-      if (!sourceId) return null;
-      return {
-        sourceId,
-        monitorW: physW,
-        monitorH: physH,
-        cropX: wpfBounds.left - physLeft,
-        cropY: wpfBounds.top - physTop,
-        cropW: wpfBounds.width,
-        cropH: wpfBounds.height,
-      };
-    }
-  }
-  return null;
-}
-
 // Phase 1 (5.6.2026): Place-in-VR-Wächter. Default false → Layer ignoriert
 // Controller-Trigger; WPF-Toggle setzt auf true. Wird in jeden FrameSlot
 // gespiegelt; Layer liest FrameSlot.placeModeOn (uint32, war reserved).
@@ -548,7 +304,9 @@ let currentPlaceModeOn = false;
 // Neuaufbau. uint32 → wraparound bei 4 Mrd Klicks ist irrelevant.
 let currentRecenterEpoch = 0;
 
-let currentHwnd = 0n;
+// OSR-Pfad: es GIBT keine Atlas-HWND mehr (offscreen). Das FramePublish.hwnd-Feld
+// bleibt im IPC-Struct (Byte-Layout unverändert) und wird konstant 0 publiziert.
+const currentHwnd = 0n;
 let atlasWindow: BrowserWindow | null = null;
 
 // Race-Schutz: erst syncIframes feuern wenn die Atlas-Page komplett
@@ -564,11 +322,9 @@ let atlasPageReady = false;
 let currentMasterVisible = true;
 
 function republish(): void {
-  // WGC: erst publizieren wenn die HWND bekannt ist (vorher kann der Layer/Helper
-  // eh nichts capturen). OSR: es GIBT keine HWND — trotzdem publizieren, denn
-  // FrameSlot trägt die Quads/Posen (Bild kommt separat über AtlasTexIn). Ohne das
-  // bekämen capture-host + Layer im OSR-Modus nie Quads → keine Overlays.
-  if (!OSR_MODE && currentHwnd === 0n) return;
+  // OSR: es GIBT keine Atlas-HWND — trotzdem publizieren, denn FrameSlot trägt die
+  // Quads/Posen (das Bild kommt separat über AtlasTexIn). Ohne das bekämen
+  // capture-host + Layer nie Quads → keine Overlays.
   const payload: FramePublish = {
     hwnd:          currentHwnd,
     width:         atlasWidth,
@@ -716,7 +472,7 @@ function applyWpfLayout(quads: AtlasQuadFromWpf[]): void {
   // nicht aufgelöst → capture-host lässt das Quad leer, WPF-Resolver pusht nach.
   {
     const entries = quads
-      .filter(q => q.type === 'window' && usesNativeWindowCapture(q.target))
+      .filter(q => q.type === 'window')
       .map(q => ({ id: q.id, hwnd: BigInt(q.hwnd ?? 0) }));
     try { winSrc.publish(entries); } catch (e) { atlasLog('[winsrc] publish error: ' + String(e)); }
     for (const e of entries) {
@@ -726,17 +482,9 @@ function applyWpfLayout(quads: AtlasQuadFromWpf[]): void {
   // slot.visible berechnen aus wpfVisible ∧ ¬iconic (siehe C6).
   applyEffectiveVisibility();
 
-  // C6: Refresh-Loop für Window-Sources nur starten wenn mindestens eine
-  // Window-Source aktiv ist. Spart die desktopCapturer-Abfrage solange nur
-  // Browser-Sources im Layout sind.
+  // C6: IsIconic-Poll für Window-Sources nur starten wenn mindestens eine
+  // Window-Source aktiv ist. Sonst läuft kein Timer.
   if (quads.some(q => q.type === 'window')) {
-    // Layout-Wechsel: Backoff zurücksetzen, damit neu hinzugekommene Titel zügig
-    // versucht werden. Bewusst KEIN sofortiges getSources() hier — applyWpfLayout
-    // kommt beim Konfigurieren in Bursts (9 Pushes in 0,7 s beobachtet), das würde
-    // genau die teuren Enumerationen auslösen, die wir loswerden wollen. Der 1-s-Poll
-    // holt es innerhalb der Backoff-Zeit nach.
-    sourcesRefreshBackoffMs = SOURCES_REFRESH_MIN_MS;
-    loggedMissingKey = '';
     startWindowSourceRefresh();
   } else stopWindowSourceRefresh();
 
@@ -771,10 +519,6 @@ function syncIframes(): void {
     title: string;        // nur relevant für kind=window (Diagnose-Label)
     name: string;
     isActive: boolean;
-    // 7.6.2026 — WPF-Self-Source Display-Crop. Wenn gesetzt: <video> wird
-    // mit Monitor-Auflösung gerendert und per overflow:hidden auf das WPF-
-    // Window-Rect maskiert. Sonst (für normale Window-Sources) leeres Objekt.
-    crop: { monW: number; monH: number; x: number; y: number } | null;
   }
   const specs: IframeSpec[] = [];
   for (const slot of currentLayout) {
@@ -786,36 +530,18 @@ function syncIframes(): void {
     const target = slotTargetById.get(slot.id) ?? '';
     const name = slotNameById.get(slot.id) ?? '';
     if (type === 'window') {
-      // 7.6.2026: WPF-Self-Source erkennen → Display-Capture + Crop statt
-      // Window-Capture. ContextMenus & ComboBox-Dropdowns sind separate
-      // Popup-HWNDs in WPF und fehlen im Window-Capture-Mode.
       // Nativer Pfad: der capture-host captured dieses Fenster selbst per WGC und
-      // komponiert es direkt über das Quad-Rect. Der Atlas baut hier deshalb KEINEN
-      // Stream mehr — sourceId leer lassen heißt: <video> bleibt ohne getUserMedia
-      // (der Reconciler startet nur bei nicht-leerer sourceId). Das DOM-Element
-      // bleibt trotzdem bestehen, damit der Namens-Sticker bei Hover weiter geht.
-      let sourceId = usesNativeWindowCapture(target)
-        ? '' : (windowSourceIdByTitle.get(target) ?? '');
-      let crop: IframeSpec['crop'] = null;
-      if (WPF_SELF_DISPLAY_MODE && target === WPF_SELF_TITLE) {
-        const c = resolveWpfCrop();
-        if (c) {
-          sourceId = c.sourceId;
-          crop = { monW: c.monitorW, monH: c.monitorH, x: c.cropX, y: c.cropY };
-        }
-        // Falls resolveWpfCrop null liefert (WPF-Bounds noch nicht gepusht,
-        // Display-Cache leer) → Fallback auf Window-Capture-Pfad (kein Crop).
-      }
+      // komponiert es direkt über das Quad-Rect. Der Atlas baut hier KEINEN Stream —
+      // das <video> bleibt leer; das .panel trägt weiter den Namens-Sticker (Hover).
       specs.push({
         domId: sourceIdToDomId(slot.id),
         rectX: slot.rectX, rectY: slot.rectY, rectW: slot.rectW, rectH: slot.rectH,
         kind: 'window',
         url: '',
-        sourceId,
+        sourceId: '',
         title: target,
         name,
         isActive: slot.id === currentHoveredId,
-        crop,
       });
     } else {
       specs.push({
@@ -827,7 +553,6 @@ function syncIframes(): void {
         title: '',
         name,
         isActive: slot.id === currentHoveredId,
-        crop: null,
       });
     }
   }
@@ -836,10 +561,7 @@ function syncIframes(): void {
   // Kind/sourceId-Wechsel (Window-Capture wurde gefunden o. verloren);
   // bleibt stabil wenn nur Pose im Layer mutiert.
   const key = specs
-    .map(s => {
-      const c = s.crop ? `${s.crop.monW}x${s.crop.monH}+${s.crop.x},${s.crop.y}` : '-';
-      return `${s.domId}@${s.rectX},${s.rectY},${s.rectW},${s.rectH}=${s.kind}:${s.url}/${s.sourceId}|${s.name}|${s.isActive ? 'A' : '-'}|c=${c}`;
-    })
+    .map(s => `${s.domId}@${s.rectX},${s.rectY},${s.rectW},${s.rectH}=${s.kind}:${s.url}/${s.sourceId}|${s.name}|${s.isActive ? 'A' : '-'}`)
     .sort()
     .join('||');
   if (key === lastSyncedDomKey) return;
@@ -907,13 +629,9 @@ function syncIframes(): void {
         }
         if (frame.src !== s.url) frame.src = s.url;
       } else {
-        // window-Capture: <video> mit MediaStream aus desktopCapturer.
-        // Solange sourceId leer ist (Title noch nicht resolved) bleibt das
-        // video schwarz; nächste Refresh-Runde triggert syncIframes erneut.
-        // 7.6.2026: bei s.crop != null (WPF-Self-Source) wechseln wir in
-        // Display-Capture-Mode + CSS-Crop — <video> wird auf Monitor-Größe
-        // gerendert und durch overflow:hidden am .panel auf den WPF-Rect
-        // maskiert. Erfasst dadurch ContextMenus / ComboBox-Dropdowns.
+        // window-Quad: der capture-host captured das Fenster nativ per WGC und
+        // komponiert es über das Quad-Rect. Das <video> bleibt hier leer (kein
+        // Stream) — es hält nur den DOM-Platz, das .panel trägt den Namens-Sticker.
         var video = currentChild;
         if (!video) {
           video = document.createElement('video');
@@ -922,57 +640,6 @@ function syncIframes(): void {
           video.playsInline = true;
           video.setAttribute('disablepictureinpicture', '');
           panel.insertBefore(video, panel.firstChild);
-        }
-        // Crop-Mode: Panel cropt das übergroße Video. Sonst Standard-Fit.
-        if (s.crop) {
-          panel.style.overflow = 'hidden';
-          video.style.position = 'absolute';
-          video.style.width  = s.crop.monW + 'px';
-          video.style.height = s.crop.monH + 'px';
-          video.style.left   = (-s.crop.x) + 'px';
-          video.style.top    = (-s.crop.y) + 'px';
-          video.style.objectFit = 'none';
-        } else {
-          panel.style.overflow = '';
-          video.style.position = '';
-          video.style.width = video.style.height = '';
-          video.style.left = video.style.top = '';
-          video.style.objectFit = '';
-        }
-        var wantSource = s.sourceId || '';
-        // Stream nur stoppen/wechseln wenn ein NEUER non-empty sourceId vorliegt
-        // der sich von der aktuellen dataset.sourceId unterscheidet. Leere
-        // sourceId (Cache hat den Titel kurz nicht — z.B. desktopCapturer-
-        // Refresh-Race, Title-Flicker) lässt den laufenden Stream in Ruhe.
-        if (wantSource && video.dataset.sourceId !== wantSource) {
-          // Stream wechseln: alten Track stoppen.
-          if (video.srcObject) {
-            try { video.srcObject.getTracks().forEach(function(t){ t.stop(); }); } catch(_) {}
-            video.srcObject = null;
-          }
-          video.dataset.sourceId = wantSource;
-          video.dataset.title = s.title || '';
-          // IIFE: var-Loop-Vars (k, s, video, wantSource) sind sonst alle vom
-          // Schleifen-Ende geteilt — bei ≥2 neuen Window-Sources im selben
-          // syncIframes-Dispatch würden alle .then()-Callbacks im LETZTEN
-          // Video-Element landen (Streams vertauscht).
-          (function(vid, src, ttl){
-            navigator.mediaDevices.getUserMedia({
-              audio: false,
-              video: { mandatory: {
-                chromeMediaSource: 'desktop',
-                chromeMediaSourceId: src,
-              } }
-            }).then(function(stream){
-              if (vid.dataset.sourceId !== src) {
-                stream.getTracks().forEach(function(t){ t.stop(); });
-                return;
-              }
-              vid.srcObject = stream;
-            }).catch(function(err){
-              console.warn('[atlas] getUserMedia FAIL for', ttl, err.name, err.message);
-            });
-          })(video, wantSource, s.title);
         }
       }
 
@@ -1117,38 +784,23 @@ function createCapturedWindow() {
   const win = new BrowserWindow({
     width: atlasWidth,
     height: atlasHeight,
-    // C4 Diagnose-Schritt (4.6.2026): erstmal ON-SCREEN sichtbar testen.
-    // Off-screen (-9999) lieferte alpha=0 ins HMD — Verdacht: Chromium
-    // suppressed Paint bei off-screen Fenstern. On-screen schließt das aus
-    // und beweist ob transparent:true selbst funktioniert. Hide-Strategie
-    // kommt im nächsten Schritt (Cloak alleine, WS_EX_LAYERED, o.ä.).
     x: 100,
     y: 100,
-    show: !OSR_MODE,
-    // Nie in der Windows-Taskleiste auftauchen (auch nicht aktiv). Als
-    // Konstruktor-Option greift es beim Erstellen, bevor Windows einen Taskbar-
-    // Button anlegt — verhindert sowohl das aktive Icon als auch den Ghost nach
-    // dem Beenden. WS_EX_TOOLWINDOW (applyCloakingAndToolWindow) kommt erst in
-    // did-finish-load und damit zu spät, um den Button noch zu entfernen.
+    // OSR (offscreen): das Fenster wird nie gezeigt — der Bildinhalt kommt per
+    // paint-Event als Shared-Texture (setupOsrCapture).
+    show: false,
     skipTaskbar: true,
-    // Frameless so WGC's captured client area exactly matches atlasWidth x
-    // atlasHeight. With frame: true the Win32 chrome eats ~14 px off each
-    // axis, WGC reports the smaller client size to the layer, and quad rects
-    // configured against the atlas size run past the swapchain edge →
-    // XR_ERROR_SWAPCHAIN_RECT_INVALID stalls iRacing's loader.
     frame: false,
     useContentSize: true,
-    title: 'BeeHive_VR Atlas (WGC source)',
+    title: 'BeeHive_VR Atlas (OSR source)',
     // C4 Alpha-Pfad: transparent BrowserWindow + transparent body bg.
-    // Compute-Shader im Layer schleift Alpha 1:1 durch (kein Chroma-Key mehr).
+    // Der Layer schleift Alpha 1:1 durch (kein Chroma-Key mehr).
     transparent: true,
     backgroundColor: '#00000000',
-    webPreferences: OSR_MODE
-      ? { backgroundThrottling: false, offscreen: { useSharedTexture: true } }
-      : { backgroundThrottling: false },
+    webPreferences: { backgroundThrottling: false, offscreen: { useSharedTexture: true } },
   });
   atlasWindow = win;
-  if (OSR_MODE) setupOsrCapture(win);
+  setupOsrCapture(win);
   // ⚠ Temporärer Debug-Hebel (3.6.2026): DevTools öffnen wenn env-var gesetzt.
   // Atlas-Window selbst ist off-screen (Alpha-Pfad), DevTools-Fenster ist sichtbar →
   // erlaubt Console + Network + DOM-Inspection.
@@ -1156,12 +808,8 @@ function createCapturedWindow() {
   if (process.env.BEEHIVE_ATLAS_DEVTOOLS) {
     win.webContents.openDevTools({ mode: 'detach' });
   }
-  // 17.6.2026 — setFrameRate ENTFERNT: wirkungslos bei diesem Fenstertyp.
-  // Electrons setFrameRate greift NUR bei offscreen-Rendering; unser Atlas ist
-  // ein sichtbares (cloaked) WGC-Fenster (siehe Kopf-Kommentar) → reiner No-Op.
-  // Die Compositing-Rate ist hier nicht drosselbar (der offscreen-Pfad, wo es
-  // ginge, wurde wegen Content-Update-Jitter verworfen). CPU-Entlastung läuft
-  // stattdessen über Prozess-Priorität (applyLowPriority) + quellseitige Caps.
+  // setFrameRate deckelt in OSR die Compositing-Rate (scharf in did-finish-load,
+  // s.u.). Ergänzt wird die CPU-Entlastung durch Prozess-Priorität (applyLowPriority).
   win.webContents.on('render-process-gone', (_e, info) => {
     console.error('[main] renderer gone:', info);
   });
@@ -1170,45 +818,24 @@ function createCapturedWindow() {
     atlasLog('[did-finish-load] DOM ready');
     // Falls in der Zwischenzeit schon Layout-Pushes kamen, jetzt nachholen.
     syncIframes();
-    if (OSR_MODE) {
-      // OSR (D2): kein HWND/Cloak — der Bildinhalt kommt per paint-Event als
-      // Shared-Texture (setupOsrSmoke). Hier nur den setFrameRate-Deckel scharf
-      // schalten (heute im Fensterpfad ein No-Op, in OSR funktional).
-      try {
-        win.webContents.setFrameRate(ATLAS_FPS);
-        atlasLog(`[osr] setFrameRate(${ATLAS_FPS}) gesetzt`);
-      } catch (e) { atlasLog('[osr] setFrameRate failed: ' + String(e)); }
-      // Phase-0-Deckel-Beweis: erzwingt kontinuierliche Repaints (rAF), damit
-      // paints/s messbar wird auch ohne animierte Widgets. Nur mit Env-Flag.
-      if (process.env.BEEHIVE_OSR_FORCEPAINT) {
-        win.webContents.executeJavaScript(
-          "(function(){var n=0,d=document.createElement('div');" +
-          "d.style.cssText='position:fixed;top:0;left:0;width:10px;height:10px;" +
-          "background:red;z-index:2147483647';document.body.appendChild(d);" +
-          "(function loop(){n=(n+1)%80;d.style.transform='translateX('+n+'px)';" +
-          "requestAnimationFrame(loop);})();})();"
-        ).catch(() => { /* ignore */ });
-        atlasLog('[osr] FORCEPAINT aktiv (rAF-Animation injiziert)');
-      }
-      republish();
-      return;
-    }
-    const buf = win.getNativeWindowHandle();
-    if (buf.length < 8) {
-      console.error('[main] getNativeWindowHandle: expected at least 8 bytes, got', buf.length);
-      return;
-    }
-    currentHwnd = buf.readBigUInt64LE(0);
-    console.log(`[main] HWND=0x${currentHwnd.toString(16)} — publishing for layer`);
-    // C4 Alpha-Pfad Schritt 2: Cloak + WS_EX_TOOLWINDOW wieder rein. Der
-    // 2.6.-Black-Screen-Bug mit Cloak+transparent ist mit aktuellem Setup
-    // neu zu prüfen — viele Variablen seither geändert (Atlas-Auto-Start,
-    // syncIframes, URL-Mapping, Compute-Shader-Setup). Wenn's wieder
-    // schwarz wird, weichen wir auf WS_EX_TOOLWINDOW alleine aus.
+    // OSR (D2): kein HWND/Cloak — der Bildinhalt kommt per paint-Event als
+    // Shared-Texture (setupOsrCapture). Hier nur den setFrameRate-Deckel scharf
+    // schalten (in OSR funktional).
     try {
-      applyCloakingAndToolWindow(currentHwnd);
-    } catch (e) {
-      console.error('[main] cloak/tool-window failed:', e);
+      win.webContents.setFrameRate(ATLAS_FPS);
+      atlasLog(`[osr] setFrameRate(${ATLAS_FPS}) gesetzt`);
+    } catch (e) { atlasLog('[osr] setFrameRate failed: ' + String(e)); }
+    // Phase-0-Deckel-Beweis: erzwingt kontinuierliche Repaints (rAF), damit
+    // paints/s messbar wird auch ohne animierte Widgets. Nur mit Env-Flag.
+    if (process.env.BEEHIVE_OSR_FORCEPAINT) {
+      win.webContents.executeJavaScript(
+        "(function(){var n=0,d=document.createElement('div');" +
+        "d.style.cssText='position:fixed;top:0;left:0;width:10px;height:10px;" +
+        "background:red;z-index:2147483647';document.body.appendChild(d);" +
+        "(function loop(){n=(n+1)%80;d.style.transform='translateX('+n+'px)';" +
+        "requestAnimationFrame(loop);})();})();"
+      ).catch(() => { /* ignore */ });
+      atlasLog('[osr] FORCEPAINT aktiv (rAF-Animation injiziert)');
     }
     republish();
   });
@@ -1266,13 +893,11 @@ app.whenReady().then(() => {
     app.quit();
     return;
   }
-  if (OSR_MODE) {
-    try {
-      atlasTexIn.open();
-      atlasLog('[osr] AtlasTexIn channel opened (Local\\BeeHiveVR_AtlasTexIn)');
-    } catch (e) {
-      atlasLog('[osr] failed to open AtlasTexIn channel: ' + String(e));
-    }
+  try {
+    atlasTexIn.open();
+    atlasLog('[osr] AtlasTexIn channel opened (Local\\BeeHiveVR_AtlasTexIn)');
+  } catch (e) {
+    atlasLog('[osr] failed to open AtlasTexIn channel: ' + String(e));
   }
   try {
     winSrc.open();
@@ -1344,13 +969,12 @@ app.whenReady().then(() => {
   // pro Aufruf — der Layer benutzt das als Liveness-Signal (siehe Watchdog
   // in layer.cpp). Ohne Heartbeat würde Atlas im Idle aussehen wie Atlas-tot,
   // weil regulärer republish() nur bei State-Change feuert. 100 ms (war 250)
-  // ist robuster gegen Background-Throttling wenn WPF minimiert + Atlas
-  // DWM-cloaked = Prozess als Background klassifiziert (Win Timer-Resolution
-  // wird coarser, setInterval kann auf >1 s stretchen). Layer-Threshold
-  // ist 120 Frames (≈1.3 s) — kleinerer Heartbeat-Tick reduziert Trip-Risiko
-  // bei kurzen OS-Stalls deutlich (16.6.2026, User-Beobachtung).
+  // ist robuster gegen Background-Throttling wenn WPF minimiert = Prozess als
+  // Background klassifiziert (Win Timer-Resolution wird coarser, setInterval kann
+  // auf >1 s stretchen). Layer-Threshold ist 120 Frames (≈1.3 s) — kleinerer
+  // Heartbeat-Tick reduziert Trip-Risiko bei kurzen OS-Stalls (16.6.2026).
   setInterval(() => {
-    if (OSR_MODE || currentHwnd !== 0n) republish();
+    republish();
   }, 100);
 
   // Place-in-VR: layer publishes pose updates while a controller-grab is
