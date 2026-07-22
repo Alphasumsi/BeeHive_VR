@@ -11,6 +11,8 @@
 #include "beehive_shm.h"
 
 #include <cstring>
+#include <functional>
+#include <map>
 
 namespace capturehost {
 
@@ -25,12 +27,13 @@ cbuffer config : register(b0) {
     uint   RectH;
     float  HighlightOn;
     float  BorderPx;
-    float  _pad0;
+    uint   SrcMode;      // 0 = Atlas (1:1 Load), 1 = Fenster (skaliert samplen)
     float  _pad_align;
     float3 HighlightColor;
     float  _pad1;
 };
 Texture2D in_texture : register(t0);
+SamplerState src_sampler : register(s0);
 RWTexture2D<float4> out_texture : register(u0);
 
 [numthreads(8, 8, 1)]
@@ -48,7 +51,18 @@ void main(uint2 tid : SV_DispatchThreadID)
         }
     }
 
-    float4 src = in_texture[pos];
+    float4 src;
+    if (SrcMode == 0) {
+        // Atlas-OSR-Textur: Quad-Rect liegt deckungsgleich IM Atlas → 1:1-Load,
+        // exakt wie bisher (kein Resampling, keine Unschärfe).
+        src = in_texture[pos];
+    } else {
+        // Fenster-Capture: eigene Textur in Fenstergröße, die auf das Quad-Rect
+        // skaliert werden muss. Normalisiert samplen (linear, clamp) — Pixelmitte
+        // (+0.5) sonst halber Texel Versatz.
+        float2 uv = (float2(tid) + 0.5) / float2(RectW, RectH);
+        src = in_texture.SampleLevel(src_sampler, uv, 0);
+    }
     out_texture[pos] = float4(src.rgb * Opacity, src.a * Opacity);
 }
 )HLSL";
@@ -60,7 +74,8 @@ void main(uint2 tid : SV_DispatchThreadID)
         uint32_t rectX, rectY, rectW, rectH;
         float    highlightOn;
         float    borderPx;
-        float    pad0, padAlign;
+        uint32_t srcMode;   // war pad0 — 0 = Atlas (Load), 1 = Fenster (SampleLevel)
+        float    padAlign;
         float    highlightColor[3];
         float    pad1;
     };
@@ -88,19 +103,71 @@ void main(uint2 tid : SV_DispatchThreadID)
             cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
             hr = device->CreateBuffer(&cbd, nullptr, &m_cb);
             if (FAILED(hr)) { err = "CreateBuffer(CB)"; return false; }
+
+            // Sampler für den Fenster-Pfad (Fenstergröße → Quad-Rect skalieren).
+            // Linear + Clamp: Downscale von z.B. 1200px-Fenstern auf ~500px-Quads
+            // ist der Normalfall, Clamp verhindert Rand-Wrapping.
+            D3D11_SAMPLER_DESC sd{};
+            sd.Filter         = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+            sd.AddressU       = D3D11_TEXTURE_ADDRESS_CLAMP;
+            sd.AddressV       = D3D11_TEXTURE_ADDRESS_CLAMP;
+            sd.AddressW       = D3D11_TEXTURE_ADDRESS_CLAMP;
+            sd.ComparisonFunc = D3D11_COMPARISON_NEVER;
+            sd.MaxLOD         = D3D11_FLOAT32_MAX;
+            hr = device->CreateSamplerState(&sd, &m_sampler);
+            if (FAILED(hr)) { err = "CreateSamplerState"; return false; }
+
             m_device = device;
             return true;
         }
 
+        /// Liefert (und cached) eine SRV auf eine Fenster-Capture-Textur. Der
+        /// capture-host ruft das je Window-Quad; WGC rotiert Pool-Surfaces, deshalb
+        /// wie beim Atlas nach Pointer cachen. Format wird aus der Quelle abgeleitet
+        /// (WGC-Pool = R8G8B8A8_UNORM), UNORM erzwungen → kein sRGB-Resample.
+        ID3D11ShaderResourceView* srvFor(ID3D11Texture2D* tex) {
+            if (!tex || !m_device) return nullptr;
+            auto it = m_winSrvs.find(tex);
+            if (it != m_winSrvs.end()) return it->second.Get();
+
+            D3D11_TEXTURE2D_DESC td{};
+            tex->GetDesc(&td);
+            DXGI_FORMAT fmt = td.Format;
+            switch (fmt) {
+                case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+                case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB: fmt = DXGI_FORMAT_B8G8R8A8_UNORM; break;
+                case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+                case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: fmt = DXGI_FORMAT_R8G8B8A8_UNORM; break;
+                default: break;
+            }
+            D3D11_SHADER_RESOURCE_VIEW_DESC srvd{};
+            srvd.Format              = fmt;
+            srvd.ViewDimension       = D3D11_SRV_DIMENSION_TEXTURE2D;
+            srvd.Texture2D.MipLevels = 1;
+            ComPtr<ID3D11ShaderResourceView> srv;
+            if (FAILED(m_device->CreateShaderResourceView(tex, &srvd, &srv))) return nullptr;
+            m_winSrvs[tex] = srv;
+            return srv.Get();
+        }
+
+        /// Nach Detach eines Fensters aufräumen (Pool-Surfaces sind dann tot).
+        void forgetWindowSrvs() { m_winSrvs.clear(); }
+
         // Komponiert alle sichtbaren, passenden Quads von sourceTex nach targetUAV.
         // Rect-Bounds-Check gegen texW/H (Port von QuadRectFitsAtlas — WPF/WGC racen
         // bei Resize ein paar Frames; nicht-passende Rects werden still übersprungen).
+        //
+        // 19.7.2026: `winSrvFor` liefert je Quad-Id optional eine EIGENE Quelle
+        // (nativ per WGC gecapturetes Fenster). Liefert sie nullptr, wird wie bisher
+        // 1:1 aus der Atlas-Textur geladen; sonst wird die Fenster-Textur auf das
+        // Quad-Rect skaliert gesampelt.
         void run(ID3D11DeviceContext* ctx, ID3D11Texture2D* sourceTex,
                  ID3D11UnorderedAccessView* targetUAV,
                  const beehive::shm::FrameSlot& frame,
                  const beehive::shm::QuadSlot* slots, uint32_t slotCount,
                  const beehive::shm::HighlightSlot& hl,
-                 uint32_t texW, uint32_t texH) {
+                 uint32_t texW, uint32_t texH,
+                 const std::function<ID3D11ShaderResourceView*(const char*)>& winSrvFor = {}) {
             using namespace beehive::shm;
 
             // Source-SRV nach Pointer cachen (WGC rotiert Pool-Surfaces; OSR öffnet je
@@ -130,13 +197,13 @@ void main(uint2 tid : SV_DispatchThreadID)
                 m_srcCachedPtr = sourceTex;
             }
 
-            ID3D11ShaderResourceView* srvs[] = {m_srcSRV.Get()};
             ID3D11UnorderedAccessView* uavs[] = {targetUAV};
             ID3D11Buffer* cbs[] = {m_cb.Get()};
+            ID3D11SamplerState* smps[] = {m_sampler.Get()};
             ctx->CSSetShader(m_shader.Get(), nullptr, 0);
-            ctx->CSSetShaderResources(0, 1, srvs);
             ctx->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
             ctx->CSSetConstantBuffers(0, 1, cbs);
+            ctx->CSSetSamplers(0, 1, smps);
 
             const bool dragOpacityValid = (hl.flags & 1u) != 0;
 
@@ -145,6 +212,19 @@ void main(uint2 tid : SV_DispatchThreadID)
                 if (!s.visible) continue;
                 if (s.rectW == 0 || s.rectH == 0) continue;
                 if ((s.rectX + s.rectW) > texW || (s.rectY + s.rectH) > texH) continue;
+
+                // Quelle je Quad: eigenes gecapturetes Fenster, sonst die Atlas-Textur.
+                ID3D11ShaderResourceView* quadSrv = winSrvFor ? winSrvFor(s.id) : nullptr;
+                const bool windowSrc = quadSrv != nullptr;
+                if (!windowSrc) quadSrv = m_srcSRV.Get();
+                // Window-Quad ohne (noch) gültige Capture → Rect leer lassen statt
+                // fälschlich den Atlas-Inhalt dieser Region zu zeigen. Erkennung über
+                // winSrvFor: liefert es für dieses Quad grundsätzlich nichts, ist es
+                // ein Browser-Quad; unterscheiden kann nur der Aufrufer (er gibt für
+                // unaufgelöste Window-Quads m_transparent zurück — s. capture-host).
+                if (!quadSrv) continue;
+                ID3D11ShaderResourceView* srvs[] = {quadSrv};
+                ctx->CSSetShaderResources(0, 1, srvs);
 
                 D3D11_MAPPED_SUBRESOURCE mapped{};
                 if (FAILED(ctx->Map(m_cb.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
@@ -182,7 +262,8 @@ void main(uint2 tid : SV_DispatchThreadID)
                     cb->highlightColor[0] = 0.0f; cb->highlightColor[1] = 0.0f;
                     cb->highlightColor[2] = 0.0f;
                 }
-                cb->pad0 = cb->padAlign = cb->pad1 = 0.0f;
+                cb->srcMode  = windowSrc ? 1u : 0u;
+                cb->padAlign = cb->pad1 = 0.0f;
                 ctx->Unmap(m_cb.Get(), 0);
 
                 ctx->Dispatch((s.rectW + 7) / 8, (s.rectH + 7) / 8, 1);
@@ -202,6 +283,10 @@ void main(uint2 tid : SV_DispatchThreadID)
         }
 
       private:
+        ComPtr<ID3D11SamplerState> m_sampler;
+        // Fenster-SRVs nach Textur-Pointer (WGC rotiert Pool-Surfaces, i.d.R. 2).
+        std::map<ID3D11Texture2D*, ComPtr<ID3D11ShaderResourceView>> m_winSrvs;
+
         ID3D11Device* m_device = nullptr;
         ComPtr<ID3D11ComputeShader> m_shader;
         ComPtr<ID3D11Buffer> m_cb;

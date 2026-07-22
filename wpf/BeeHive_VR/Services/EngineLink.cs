@@ -83,6 +83,15 @@ public sealed class AtlasQuadDto
     /// die per <c>desktopCapturer.getUserMedia</c> ein &lt;video&gt; rendert.
     /// </summary>
     [JsonPropertyName("type")]    public string? Type { get; set; }
+
+    /// <summary>
+    /// Window-Capture-Entkopplung (19.7.2026): HWND des Ziel-Fensters, per
+    /// <see cref="WindowResolver"/> (EnumWindows — sieht auch Overlay-/Tool-Fenster,
+    /// die Chromiums desktopCapturer verschweigt) aufgelöst. Atlas publiziert sie
+    /// via WinSrc-SHM an den capture-host (native WGC-Capture). 0 = unaufgelöst.
+    /// HWND-Werte passen in 32 bit → JSON number ist verlustfrei.
+    /// </summary>
+    [JsonPropertyName("hwnd")]    public ulong Hwnd { get; set; }
 }
 
 /// <summary>

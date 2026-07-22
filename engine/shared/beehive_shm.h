@@ -24,6 +24,7 @@ namespace beehive::shm {
     inline constexpr wchar_t kTexOutMappingName[]    = L"Local\\BeeHiveVR_TexOut";
     inline constexpr wchar_t kHighlightMappingName[] = L"Local\\BeeHiveVR_HL";
     inline constexpr wchar_t kAtlasTexInMappingName[]= L"Local\\BeeHiveVR_AtlasTexIn";
+    inline constexpr wchar_t kWinSrcMappingName[]    = L"Local\\BeeHiveVR_WinSrc";
 
     inline constexpr uint32_t kMaxQuads = 12;
 
@@ -140,5 +141,28 @@ namespace beehive::shm {
     static_assert(sizeof(AtlasTexIn) == 128, "AtlasTexIn muss 128 Bytes sein (koffi-Kontrakt)");
 
     inline constexpr uint32_t kAtlasTexInMappingSize = sizeof(AtlasTexIn); // 128
+
+    // ---- Atlas → capture-host (Window-Capture-Entkopplung, 19.7.2026) ------------
+    // Chromiums desktopCapturer enumeriert Overlay-/Tool-/Layered-Fenster nicht
+    // (Beweis: „Bloops Overlay" fehlt in der Liste, WGC-direkt kann es). Deshalb
+    // captured der capture-host Window-Quads selbst per WGC auf die HWND. Die HWND
+    // kommt von der WPF (WindowResolver, EnumWindows sieht ALLE Fenster) über den
+    // Layout-Push zum Atlas, der sie hier je Quad-Id publiziert. Writer = Atlas
+    // (Seqlock wie FrameSlot). hwnd==0 = (noch) nicht aufgelöst → Quad bleibt leer.
+
+    struct WinSrcEntry {
+        char     id[16];    // @0  Quad-Id (match auf QuadSlot.id)
+        uint64_t hwnd;      // @16 Ziel-Fenster im WPF-Adressraum (HWND-Werte sind global)
+    };
+    static_assert(sizeof(WinSrcEntry) == 24, "WinSrcEntry muss 24 Bytes sein");
+
+    struct WinSrcSlot {
+        uint64_t    generation;         // @0   Seqlock (Atlas bumpt bei jeder Änderung)
+        uint32_t    count;              // @8   gültige Einträge
+        uint32_t    pad0;               // @12
+        WinSrcEntry entries[kMaxQuads]; // @16  12 × 24 = 288
+        uint32_t    reserved[4];        // @304 → 320
+    };
+    static_assert(sizeof(WinSrcSlot) == 320, "WinSrcSlot muss 320 Bytes sein (koffi-Kontrakt)");
 
 } // namespace beehive::shm

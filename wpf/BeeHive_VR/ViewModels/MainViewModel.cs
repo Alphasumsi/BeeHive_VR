@@ -305,6 +305,14 @@ public partial class MainViewModel : ObservableObject
             if (_overlayContext == OverlayContext.Spotter) PushCurrentLayoutToEngine();
         };
 
+        // Window-Capture-Entkopplung (19.7.2026): ändert sich eine Titel→HWND-
+        // Zuordnung (Ziel-App gestartet/neu gestartet/geschlossen), Layout neu
+        // pushen — BuildAtlasQuads löst dann die frische HWND auf und der Atlas
+        // publiziert sie via WinSrc-SHM an den capture-host. Resolver feuert auf
+        // dem UI-Thread (DispatcherTimer), Dispatcher-Hop nur zur Sicherheit.
+        WindowResolver.Instance.Changed += () =>
+            Application.Current?.Dispatcher.BeginInvoke(PushCurrentLayoutToEngine);
+
         // Bewusst kein Auto-Load im Konstruktor — wir lassen das MainWindow
         // das nach Loaded triggern, damit Fehler dem User sichtbar gezeigt
         // werden können statt im weißen Splash-Screen zu landen.
@@ -820,18 +828,23 @@ public partial class MainViewModel : ObservableObject
     private const int DefaultRectW = 512;
     private const int DefaultRectH = 384;
 
-    private static IEnumerable<AtlasQuadDto> BuildAtlasQuads(IEnumerable<SourceModel> sources)
+    private static List<AtlasQuadDto> BuildAtlasQuads(IEnumerable<SourceModel> sources)
     {
         // C6: unsichtbare Sources werden GAR NICHT gepusht — gibt Atlas-Slot
         // frei (MAX_QUADS=8) und zerstört das Iframe (spart CPU/GPU). Re-Toggle
         // auf Visible=true baut das Iframe frisch wieder auf — URL lädt neu.
         // Bewusst akzeptiert: "ausblenden" hieß bisher nur Render-Mute, jetzt
         // echtes Freigeben des Slots.
+        //
+        // 19.7.2026: von yield-lazy auf List umgestellt — die Window-Capture-
+        // Entkopplung braucht hier Seiteneffekte (WindowResolver.Resolve +
+        // SetWatched), die bei doppelter Enumeration doppelt liefen.
+        var result = new List<AtlasQuadDto>();
         int i = 0;
         foreach (var s in sources)
         {
             if (!s.Visible) continue;
-            if (i++ >= AtlasSlotsAvailable) yield break;
+            if (i++ >= AtlasSlotsAvailable) break;
             var (qx, qy, qz, qw) = YawPitchToQuat(s.Yaw, s.Pitch);
 
             // Scale = quad width in meters (alter Layer-Vertrag). Height aus
@@ -842,7 +855,7 @@ public partial class MainViewModel : ObservableObject
                 : 3.0f / 4.0f;
             float heightM = widthM * aspect;
 
-            yield return new AtlasQuadDto
+            result.Add(new AtlasQuadDto
             {
                 Id      = s.Id,
                 PosX    = s.X, PosY = s.Y, PosZ = s.Z,
@@ -870,8 +883,21 @@ public partial class MainViewModel : ObservableObject
                 // C6: Subtyp — "browser" oder "window". Electron-Resolver
                 // baut daraus die finale iframe-URL.
                 Type    = s.Type == SourceType.Window ? "window" : "browser",
-            };
+                // Window-Capture-Entkopplung: Titel→HWND via EnumWindows (sieht auch
+                // Overlay-/Tool-Fenster). 0 = unaufgelöst → capture-host lässt das
+                // Quad leer, der Resolver-Timer pusht bei Auflösung erneut.
+                Hwnd    = s.Type == SourceType.Window
+                    ? WindowResolver.Instance.Resolve(s.Target) : 0,
+            });
         }
+
+        // Resolver-Watch aktuell halten: nur die Titel der gerade gepushten
+        // Window-Quellen (leer → Timer stoppt). Änderungen feuern Changed →
+        // MainViewModel pusht das Layout neu (Abo im Ctor).
+        WindowResolver.Instance.SetWatched(
+            result.Where(q => q.Type == "window" && !string.IsNullOrEmpty(q.Target))
+                  .Select(q => q.Target!));
+        return result;
     }
 
     // Holt den aktuellen BG-Opacity-Wert (0..1) für einen Dashie aus dem

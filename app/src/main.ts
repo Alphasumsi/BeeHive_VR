@@ -58,6 +58,7 @@ function atlasLog(msg: string): void {
 }
 import { sharedFrame, tryAcquireSingleInstance, FramePublish, QuadDesc } from './ipc/shared-frame';
 import { atlasTexIn } from './ipc/atlas-texin';
+import { winSrc } from './ipc/win-src';
 import { wpfLink, AtlasQuadFromWpf } from './ipc/wpf-link';
 import { placeOut, PlaceUpdate } from './ipc/place-out';
 
@@ -162,6 +163,14 @@ let atlasHeight = 256;
 // → zurück auf den alten WGC-Fenster-Pfad (bleibt für Window-Capture + Fallback).
 // Nur der Wert "0" schaltet ab; unset oder alles andere = OSR.
 const OSR_MODE = process.env.BEEHIVE_ATLAS_OSR !== '0';
+
+// Window-Capture-Entkopplung (19.7.2026): Window-Quads werden vom capture-host
+// nativ per WGC auf die HWND gecaptured (er sieht auch Overlay-/Tool-Fenster, die
+// Chromiums desktopCapturer verschweigt) und direkt in den Ring komponiert. Der
+// Atlas baut dafür dann KEIN <video>/getUserMedia mehr — das spart den teuren
+// getSources-Auflösungsversuch (Ruckeln beim Start) und die 18-fps-Hover-Regression.
+// Kill-Switch: BEEHIVE_WINCAP_NATIVE=0 → alter desktopCapturer-Pfad.
+const WINCAP_NATIVE = process.env.BEEHIVE_WINCAP_NATIVE !== '0';
 const ATLAS_FPS = (() => {
   const n = parseInt(process.env.BEEHIVE_ATLAS_FPS || '', 10);
   return Number.isFinite(n) && n > 0 ? n : 30;
@@ -212,6 +221,23 @@ const slotNameById = new Map<string, string>();
 // src=target. "window" → DOM-Element ist <video> mit MediaStream aus
 // desktopCapturer. Default (fehlt/null) = "browser" für Rückwärts-Kompat.
 const slotTypeById = new Map<string, string>();
+
+// Window-Capture-Entkopplung (19.7.2026): id → HWND des Ziel-Fensters, von der
+// WPF per EnumWindows aufgelöst und im Layout-Push mitgeliefert. 0n = unaufgelöst.
+// Publiziert via WinSrc-SHM an den capture-host (native WGC-Capture).
+const slotHwndById = new Map<string, bigint>();
+
+// Läuft dieses Window-Quad über den nativen WGC-Pfad (capture-host) statt über
+// Chromiums desktopCapturer? Ausnahme: die WPF-Self-Quelle im Display-Crop-Modus —
+// die MUSS beim desktopCapturer bleiben, weil sie den ganzen Monitor captured und
+// zuschneidet (WPF-Kontextmenüs/Dropdowns sind eigene Popup-HWNDs und fehlen in
+// einer reinen Fenster-Capture). Sonst würde der capture-host das Rect mit der
+// popup-losen Variante überschreiben.
+function usesNativeWindowCapture(target: string | undefined): boolean {
+  if (!WINCAP_NATIVE) return false;
+  if (WPF_SELF_DISPLAY_MODE && target === WPF_SELF_TITLE) return false;
+  return true;
+}
 
 // C6 (5.6.2026): WPF-gegebener Visible-Flag pro Slot (vor iconic-Maskierung).
 // Brauchen wir um beim de-Minimieren wieder auf den User-Wunsch zurückzukehren
@@ -398,14 +424,31 @@ function pollWindowIconic(): void {
     // WPF-Self-Quelle: iconic kommt aus wpfBounds (applyWpfSelfIconic) — nicht anfassen.
     if (title === WPF_SELF_TITLE) continue;
 
-    const sourceId = windowSourceIdByTitle.get(title);
-    const hwnd = sourceId ? hwndFromSourceId(sourceId) : null;
-    if (hwnd == null) { needResolve = true; continue; }
+    // Nativer Pfad: die HWND kommt fertig von der WPF (WindowResolver) im Layout-
+    // Push — kein desktopCapturer nötig. Das ist der Grund, warum getSources hier
+    // NICHT mehr angestoßen wird (war die Quelle des Ruckelns beim Start).
+    let hwnd: bigint | null;
+    if (usesNativeWindowCapture(title)) {
+      const pushed = slotHwndById.get(slot.id) ?? 0n;
+      if (pushed === 0n) {
+        // WPF findet das Fenster nicht (zu / Titel geändert) → Quad ausblenden.
+        if (iconicById.get(slot.id) !== true) { iconicById.set(slot.id, true); changed = true; }
+        continue;
+      }
+      hwnd = pushed;
+    } else {
+      const sourceId = windowSourceIdByTitle.get(title);
+      hwnd = sourceId ? hwndFromSourceId(sourceId) : null;
+      if (hwnd == null) { needResolve = true; continue; }
+    }
 
     if (!IsWindow(hwnd)) {
-      // Fenster geschlossen/neu → sourceId ist stale, muss neu aufgelöst werden.
-      windowSourceIdByTitle.delete(title);
-      needResolve = true;
+      // Fenster geschlossen/neu. Im nativen Pfad löst die WPF neu auf (2-s-Timer),
+      // im Legacy-Pfad brauchen wir eine frische sourceId.
+      if (!usesNativeWindowCapture(title)) {
+        windowSourceIdByTitle.delete(title);
+        needResolve = true;
+      }
       if (iconicById.get(slot.id) !== true) { iconicById.set(slot.id, true); changed = true; }
       continue;
     }
@@ -663,6 +706,22 @@ function applyWpfLayout(quads: AtlasQuadFromWpf[]): void {
     if (q.target) slotTargetById.set(q.id, q.target);
     if (q.name)   slotNameById.set(q.id, q.name);
     if (q.type)   slotTypeById.set(q.id, q.type);
+    // Window-Capture-Entkopplung: HWND (von der WPF resolved) je Quad merken.
+    if (q.type === 'window') slotHwndById.set(q.id, BigInt(q.hwnd ?? 0));
+  }
+  for (const id of Array.from(slotHwndById.keys())) {
+    if (!quads.some(q => q.id === id)) slotHwndById.delete(id);
+  }
+  // quadId→hwnd an den capture-host publizieren (WinSrc-SHM). hwnd=0 = noch
+  // nicht aufgelöst → capture-host lässt das Quad leer, WPF-Resolver pusht nach.
+  {
+    const entries = quads
+      .filter(q => q.type === 'window' && usesNativeWindowCapture(q.target))
+      .map(q => ({ id: q.id, hwnd: BigInt(q.hwnd ?? 0) }));
+    try { winSrc.publish(entries); } catch (e) { atlasLog('[winsrc] publish error: ' + String(e)); }
+    for (const e of entries) {
+      atlasLog(`[winsrc] ${e.id} → hwnd=0x${e.hwnd.toString(16)}${e.hwnd === 0n ? ' (unaufgelöst)' : ''}`);
+    }
   }
   // slot.visible berechnen aus wpfVisible ∧ ¬iconic (siehe C6).
   applyEffectiveVisibility();
@@ -730,7 +789,13 @@ function syncIframes(): void {
       // 7.6.2026: WPF-Self-Source erkennen → Display-Capture + Crop statt
       // Window-Capture. ContextMenus & ComboBox-Dropdowns sind separate
       // Popup-HWNDs in WPF und fehlen im Window-Capture-Mode.
-      let sourceId = windowSourceIdByTitle.get(target) ?? '';
+      // Nativer Pfad: der capture-host captured dieses Fenster selbst per WGC und
+      // komponiert es direkt über das Quad-Rect. Der Atlas baut hier deshalb KEINEN
+      // Stream mehr — sourceId leer lassen heißt: <video> bleibt ohne getUserMedia
+      // (der Reconciler startet nur bei nicht-leerer sourceId). Das DOM-Element
+      // bleibt trotzdem bestehen, damit der Namens-Sticker bei Hover weiter geht.
+      let sourceId = usesNativeWindowCapture(target)
+        ? '' : (windowSourceIdByTitle.get(target) ?? '');
       let crop: IframeSpec['crop'] = null;
       if (WPF_SELF_DISPLAY_MODE && target === WPF_SELF_TITLE) {
         const c = resolveWpfCrop();
@@ -1209,6 +1274,12 @@ app.whenReady().then(() => {
       atlasLog('[osr] failed to open AtlasTexIn channel: ' + String(e));
     }
   }
+  try {
+    winSrc.open();
+    atlasLog('[winsrc] WinSrc channel opened (Local\\BeeHiveVR_WinSrc)');
+  } catch (e) {
+    atlasLog('[winsrc] failed to open WinSrc channel: ' + String(e));
+  }
 
   // WPF pipe — non-blocking. If WPF is not running yet, the client will
   // retry every second until it shows up.
@@ -1329,6 +1400,7 @@ app.on('before-quit', () => {
   try { wpfLink.stop(); } catch { /* ignore */ }
   try { sharedFrame.close(); } catch { /* ignore */ }
   try { atlasTexIn.close(); } catch { /* ignore */ }
+  try { winSrc.close(); } catch { /* ignore */ }
 });
 
 app.on('window-all-closed', () => app.quit());

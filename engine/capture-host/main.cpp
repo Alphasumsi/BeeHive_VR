@@ -21,6 +21,9 @@
 #include <cstdarg>
 #include <cstddef>
 #include <cstdio>
+#include <map>
+#include <set>
+#include <string>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -175,6 +178,170 @@ namespace {
         if (!g_atlasTexInView) return;
         std::memcpy(g_atlasTexInView + offsetof(AtlasTexIn, consumedFrameCounter), &fc, sizeof(fc));
     }
+
+    // ---------------- WinSrc-SHM (D2/WinCap: Atlas = Writer, hier read-only) ----------
+    // Trägt je Window-Quad die HWND, die die WPF per EnumWindows aufgelöst hat.
+    // Chromiums desktopCapturer sieht Overlay-/Tool-Fenster nicht — wir capturen sie
+    // deshalb hier selbst per WGC direkt auf die HWND (wie OpenKneeboard).
+
+    HANDLE g_winSrcMapping = nullptr;
+    const uint8_t* g_winSrcView = nullptr;
+
+    bool TryOpenWinSrcShm() {
+        if (g_winSrcView) return true;
+        g_winSrcMapping = OpenFileMappingW(FILE_MAP_READ, FALSE, kWinSrcMappingName);
+        if (!g_winSrcMapping) return false;
+        g_winSrcView = static_cast<const uint8_t*>(
+            MapViewOfFile(g_winSrcMapping, FILE_MAP_READ, 0, 0, sizeof(WinSrcSlot)));
+        if (!g_winSrcView) {
+            CloseHandle(g_winSrcMapping);
+            g_winSrcMapping = nullptr;
+            return false;
+        }
+        return true;
+    }
+
+    void ReadWinSrcStable(WinSrcSlot& out) {
+        out = WinSrcSlot{};
+        if (!g_winSrcView) return;
+        WinSrcSlot a{}, b{};
+        std::memcpy(&a, g_winSrcView, sizeof(a));
+        std::memcpy(&b, g_winSrcView, sizeof(b));
+        if (a.generation == b.generation) out = a;
+    }
+
+    // ---------------- Window-Capture-Manager -------------------------------------------
+    // Je Window-Quad eine eigene WGC-Session auf die HWND. capture.h ist instanz-sicher
+    // (keine Statics), die Drosselung (C/C2) gilt pro Session. Re-Attach bei HWND-Wechsel
+    // (Ziel-App neu gestartet → WPF resolved neu), Detach wenn das Quad verschwindet oder
+    // das Fenster zu ist.
+
+    struct WindowCapture {
+        uint64_t hwnd = 0;
+        std::unique_ptr<openxr_api_layer::capture::ICaptureWindow> cap;
+        ID3D11Texture2D* surface = nullptr;  // gehört der Capture, nur geborgt
+        bool attachFailed = false;           // Fehler bereits geloggt → nicht spammen
+    };
+
+    class WindowCaptureManager {
+      public:
+        void configure(ID3D11Device* device, int64_t minPullNs, int64_t minUpdateNs) {
+            m_device = device; m_minPullNs = minPullNs; m_minUpdateNs = minUpdateNs;
+        }
+
+        /// Bestand mit dem SHM abgleichen (attach/detach/re-attach). Liefert true,
+        /// wenn sich die Zusammensetzung geändert hat (→ Compose-Cache invalidieren).
+        bool sync(const WinSrcSlot& src) {
+            bool structureChanged = false;
+            std::set<std::string> seen;
+
+            for (uint32_t i = 0; i < src.count && i < kMaxQuads; ++i) {
+                char idbuf[17]{};
+                std::memcpy(idbuf, src.entries[i].id, 16);
+                std::string id(idbuf);
+                if (id.empty()) continue;
+                seen.insert(id);
+
+                const uint64_t want = src.entries[i].hwnd;
+                auto& wc = m_caps[id];
+
+                // Fenster inzwischen zu → Capture wegwerfen, Quad bleibt leer.
+                if (want != 0 && !IsWindow((HWND)(uintptr_t)want)) {
+                    if (wc.cap) {
+                        Log(Fmt("WinCap: Fenster weg (id=%s hwnd=0x%llx) -- detach", id.c_str(), want));
+                        wc.cap.reset(); wc.surface = nullptr; structureChanged = true;
+                    }
+                    wc.hwnd = 0; wc.attachFailed = false;
+                    continue;
+                }
+                if (want == 0) {                    // von der WPF noch nicht aufgelöst
+                    if (wc.cap) { wc.cap.reset(); wc.surface = nullptr; structureChanged = true; }
+                    wc.hwnd = 0; wc.attachFailed = false;
+                    continue;
+                }
+                if (wc.cap && wc.hwnd == want) continue;   // unverändert
+
+                // Neu oder HWND gewechselt → (re-)attach.
+                wc.cap.reset(); wc.surface = nullptr;
+                wc.hwnd = want; wc.attachFailed = false;
+                structureChanged = true;
+                try {
+                    wc.cap = std::make_unique<openxr_api_layer::capture::CaptureWindowWinRT>(
+                        m_device, (HWND)(uintptr_t)want);
+                    wc.cap->setMinPullIntervalNs(m_minPullNs);
+                    wc.cap->setMinUpdateIntervalNs(m_minUpdateNs);
+                    Log(Fmt("WinCap: attached id=%s hwnd=0x%llx", id.c_str(), want));
+                } catch (const winrt::hresult_error& e) {
+                    wc.attachFailed = true;
+                    Log(Fmt("WinCap: attach FEHLER id=%s hwnd=0x%llx hr=0x%08x (%s)",
+                            id.c_str(), want, (uint32_t)e.code().value,
+                            winrt::to_string(e.message()).c_str()));
+                }
+            }
+
+            // Quads, die es nicht mehr gibt, abräumen.
+            for (auto it = m_caps.begin(); it != m_caps.end();) {
+                if (seen.count(it->first)) { ++it; continue; }
+                if (it->second.cap) {
+                    Log(Fmt("WinCap: Quad weg (id=%s) -- detach", it->first.c_str()));
+                    structureChanged = true;
+                }
+                it = m_caps.erase(it);
+            }
+            return structureChanged;
+        }
+
+        /// Frische Surfaces ziehen. Liefert true, wenn sich mindestens eine geändert hat.
+        bool pull() {
+            bool changed = false;
+            for (auto& [id, wc] : m_caps) {
+                if (!wc.cap) continue;
+                ID3D11Texture2D* s = nullptr;
+                try {
+                    s = wc.cap->getSurface();
+                } catch (const winrt::hresult_error& e) {
+                    Log(Fmt("WinCap: getSurface FEHLER id=%s hr=0x%08x -- detach",
+                            id.c_str(), (uint32_t)e.code().value));
+                    wc.cap.reset(); wc.hwnd = 0;
+                    if (wc.surface) { wc.surface = nullptr; changed = true; }
+                    continue;
+                }
+                if (s != wc.surface) { wc.surface = s; changed = true; }
+            }
+            return changed;
+        }
+
+        /// Textur für ein Quad (nullptr = kein Window-Quad bzw. noch keine Capture).
+        ID3D11Texture2D* surfaceFor(const char id16[16]) const {
+            char idbuf[17]{};
+            std::memcpy(idbuf, id16, 16);
+            auto it = m_caps.find(std::string(idbuf));
+            return it == m_caps.end() ? nullptr : it->second.surface;
+        }
+
+        /// Ist das Quad ein Window-Quad (egal ob die Capture gerade steht)?
+        bool isWindowQuad(const char id16[16]) const {
+            char idbuf[17]{};
+            std::memcpy(idbuf, id16, 16);
+            return m_caps.count(std::string(idbuf)) != 0;
+        }
+
+        /// Für den Skip-Tick-Key: Summe der aktuellen Surface-Pointer.
+        uint64_t surfaceFingerprint() const {
+            uint64_t h = 1469598103934665603ull;
+            for (const auto& [id, wc] : m_caps) {
+                h ^= (uint64_t)(uintptr_t)wc.surface; h *= 1099511628211ull;
+            }
+            return h;
+        }
+
+        bool empty() const { return m_caps.empty(); }
+
+      private:
+        ID3D11Device* m_device = nullptr;
+        int64_t m_minPullNs = 0, m_minUpdateNs = 0;
+        std::map<std::string, WindowCapture> m_caps;
+    };
 
     // OpenProcess-Cache für die Handle-Duplikation aus dem Atlas-Prozess.
     HANDLE g_atlasProc = nullptr;
@@ -604,6 +771,31 @@ int main(int argc, char** argv) {
     ComPtr<ID3D11Texture2D> osrTex;
     uint64_t osrFrame = 0;
 
+    // WinCap (19.7.2026): Window-Quads werden hier nativ per WGC gecaptured statt
+    // im Atlas per desktopCapturer (der Overlay-/Tool-Fenster gar nicht anbietet).
+    WindowCaptureManager winCaps;
+    winCaps.configure(device.Get(), minPullNs, minUpdateNs);
+    uint64_t lastWinSrcGen = 0;
+
+    // 1x1 vollständig transparente Textur: Platzhalter für Window-Quads, deren
+    // Capture (noch) nicht steht — HWND unaufgelöst, Fenster minimiert/zu, oder
+    // WGC-Attach fehlgeschlagen. Damit bleibt das Rect sauber leer.
+    ComPtr<ID3D11ShaderResourceView> transparentSRV;
+    {
+        const uint32_t zero = 0;
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = td.Height = 1; td.MipLevels = td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        td.SampleDesc.Count = 1;
+        td.Usage = D3D11_USAGE_IMMUTABLE;
+        td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA srd{ &zero, sizeof(zero), 0 };
+        ComPtr<ID3D11Texture2D> tex;
+        if (SUCCEEDED(device->CreateTexture2D(&td, &srd, &tex)))
+            device->CreateShaderResourceView(tex.Get(), nullptr, &transparentSRV);
+        if (!transparentSRV) Log("WARN: transparente Platzhalter-SRV nicht erstellt");
+    }
+
     for (;;) {
         WaitForSingleObject(timer, 1000);
         ++ticks;
@@ -749,7 +941,21 @@ int main(int argc, char** argv) {
         }
 
         // Skip-Tick: compose-relevanter Input unverändert → nur Heartbeat.
-        std::vector<uint8_t> key(sizeof(uint32_t) + sizeof(slots) + 40);
+        // WinCap: Zuordnung Quad→HWND abgleichen und frische Fenster-Surfaces ziehen.
+        // Läuft unabhängig vom Atlas-Frame — ein Fenster kann sich ändern, während der
+        // Atlas-Inhalt steht (und umgekehrt).
+        bool winChanged = false;
+        if (TryOpenWinSrcShm()) {
+            WinSrcSlot ws{};
+            ReadWinSrcStable(ws);
+            if (ws.generation != lastWinSrcGen) {
+                lastWinSrcGen = ws.generation;
+                if (winCaps.sync(ws)) { winChanged = true; compose.forgetWindowSrvs(); }
+            }
+        }
+        if (winCaps.pull()) winChanged = true;
+
+        std::vector<uint8_t> key(sizeof(uint32_t) + sizeof(slots) + 40 + sizeof(uint64_t));
         {
             uint8_t* p = key.data();
             std::memcpy(p, &frame.placeModeOn, sizeof(uint32_t)); p += sizeof(uint32_t);
@@ -757,9 +963,14 @@ int main(int argc, char** argv) {
             std::memcpy(p, hl.hoveredId, 16); p += 16;
             std::memcpy(p, hl.grabbedId, 16); p += 16;
             std::memcpy(p, &hl.dragOpacity, 4); p += 4;
-            std::memcpy(p, &hl.flags, 4);
+            std::memcpy(p, &hl.flags, 4); p += 4;
+            // Fenster-Surfaces mit in den Key: sonst friert der Fenster-Inhalt ein,
+            // solange der Atlas nichts Neues liefert (Skip-Tick würde greifen).
+            const uint64_t winFp = winCaps.surfaceFingerprint();
+            std::memcpy(p, &winFp, sizeof(winFp));
         }
-        const bool inputChanged = (surface != lastComposedSurface) || (key != lastComposeKey);
+        const bool inputChanged = (surface != lastComposedSurface) || (key != lastComposeKey)
+                               || winChanged;
 
         if (inputChanged) {
             const uint32_t j = (g_texOut.latestIndex + 1) % kTexRingBuffers;
@@ -768,8 +979,18 @@ int main(int argc, char** argv) {
             // in den Shared-Buffer kopieren. AcquireSync(0,0) schlägt nur fehl, wenn
             // der Layer gerade genau diesen Buffer kopiert — dann diesen Tick skippen
             // (bei 3 Buffern praktisch nie: Layer fasst nur latest/lastGood an).
+            // Quellen-Auswahl je Quad: Window-Quads aus ihrer eigenen WGC-Textur
+            // (skaliert), alle anderen 1:1 aus der Atlas-Textur. Für ein Window-Quad
+            // ohne stehende Capture liefern wir die transparente 1x1-Dummy-SRV —
+            // sonst würde der Compose auf die Atlas-Textur zurückfallen und dort den
+            // (leeren, aber u.U. von Nachbar-Quads bemalten) Bereich hineinkopieren.
+            auto winSrvFor = [&](const char* id16) -> ID3D11ShaderResourceView* {
+                if (!winCaps.isWindowQuad(id16)) return nullptr;   // Browser-Quad
+                ID3D11Texture2D* t = winCaps.surfaceFor(id16);
+                return t ? compose.srvFor(t) : transparentSRV.Get();
+            };
             compose.run(ctx.Get(), surface, ring.intermediateUAV.Get(), frame, slots, n, hl,
-                        ring.width, ring.height);
+                        ring.width, ring.height, winSrvFor);
             if (ring.mutex[j]->AcquireSync(0, 0) == S_OK) {
                 ctx->CopyResource(ring.tex[j].Get(), ring.intermediate.Get());
                 ring.mutex[j]->ReleaseSync(0);

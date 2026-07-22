@@ -54,6 +54,12 @@ export interface AtlasQuadFromWpf {
   // window-capture.html?sourceId=<dc-id>&title=<urlenc>.
   // Undefined wird als "browser" behandelt (Rückwärts-Kompat).
   type?:    string;
+  // Window-Capture-Entkopplung (19.7.2026): HWND des Ziel-Fensters, von der WPF
+  // per EnumWindows aufgelöst (sieht auch Overlay-/Tool-Fenster, die Chromiums
+  // desktopCapturer verschweigt). main.ts publiziert sie via WinSrc-SHM an den
+  // capture-host (native WGC-Capture). 0/undefined = (noch) nicht aufgelöst.
+  // HWND-Werte passen in 32 bit → JSON/JS number ist verlustfrei.
+  hwnd?:    number;
 }
 
 class WpfLink extends EventEmitter {

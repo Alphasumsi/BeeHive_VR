@@ -68,6 +68,25 @@ namespace openxr_api_layer::capture {
                 2,
                 m_lastSize);
             m_session = m_framePool.CreateCaptureSession(m_item);
+
+            // 19.7.2026 (Window-Capture-Entkopplung): gelben WGC-Rahmen + Mauszeiger
+            // abschalten. Beim gecloakten Atlas-Fenster war das egal, seit der
+            // capture-host aber ECHTE, sichtbare Fenster captured (Bloops-Overlay &
+            // Co.) landeten sonst Rahmen und Cursor mit im VR-Overlay.
+            // Beides best-effort: IsCursorCaptureEnabled gibt es ab Win10 2004,
+            // IsBorderRequired erst ab Win11 22H2 — auf älteren Systemen wirft der
+            // Setter, das ist kein Fehler (nur ein Schönheitsfehler im Bild).
+            try {
+                m_session.IsCursorCaptureEnabled(false);
+            } catch (const winrt::hresult_error&) {
+                // IGraphicsCaptureSession2 nicht verfügbar — Cursor bleibt drin.
+            }
+            try {
+                m_session.IsBorderRequired(false);
+            } catch (const winrt::hresult_error&) {
+                // IGraphicsCaptureSession3 nicht verfügbar — gelber Rahmen bleibt.
+            }
+
             m_session.StartCapture();
         }
 
