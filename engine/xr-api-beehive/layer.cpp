@@ -15,18 +15,14 @@
 
 #include "layer.h"
 #include <log.h>
-#include <utils/capture.h>
 #include <array>
 #include <cstring>
 #include <cmath>
-#include <d3dcompiler.h>
 
 // D1 (8.7.2026): TexOut-/HL-Layouts für den externen Capture-Pfad (capture-host).
-// FrameSlot/QuadSlot bleiben bis zur Cleanup-Phase als private Kopien unten definiert
-// (byte-identisch; der shared Header ist namespaced, keine Kollision).
+// FrameSlot/QuadSlot bleiben als private Kopien unten definiert (byte-identisch;
+// der shared Header ist namespaced, keine Kollision).
 #include "../shared/beehive_shm.h"
-
-#pragma comment(lib, "d3dcompiler.lib")
 
 namespace openxr_api_layer {
 
@@ -37,91 +33,6 @@ namespace openxr_api_layer {
     const std::vector<std::string> implicitExtensions = {};
 
     // Poses live in QuadSlot now — driven by Electron, see app/src/main.ts.
-
-    // ---------------------------------------------------------------------
-    // C4 Chroma-Key Compute Shader.
-    //
-    // Atlas-Renderer (Electron) malt überall wo kein Widget-Pixel liegt pures
-    // Magenta (#FF00FF). Dieser Shader scannt jeden Pixel: Magenta → alpha=0
-    // (komplett transparent, RGB auch 0 damit der OpenXR-Compositor bei pre-
-    // multiplied Blending nicht durchschimmert), alles andere → pre-multiplied
-    // Alpha mit dem Per-Quad-Opacity-Multiplier (B10).
-    //
-    // sRGB-Behandlung: WGC-Source ist R8G8B8A8_UNORM (raw sRGB-encoded Bytes von
-    // Chromium). Intermediate-Tex ist UAV-bindbar UNORM. Wir SCHREIBEN die
-    // sRGB-encoded Werte 1:1 raus — anschließendes CopyResource auf das
-    // UNORM_SRGB-Swapchain-Image (C5) reinterpretiert die Bytes als sRGB,
-    // OpenXR-Runtime decoded zu linear für sauberes Blending. Würden wir hier
-    // sRGB→Linear konvertieren, würde die Runtime nochmal decoden → doppelter
-    // Gamma-Pop. Opacity-Multiplikation läuft in sRGB-Space — strictly gamma-
-    // inkorrekt, aber matched die Pre-C5-Pipeline-Optik (CopyResource skaliert
-    // auch nicht).
-    //
-    // HighlightOn/BorderPx/HighlightColor sind für B5 (Place-in-VR cyan/grün
-    // Rahmen) vorbereitet; heute kommt die CB mit HighlightOn=0 rein.
-    constexpr const char* kChromaKeyHlsl = R"HLSL(
-cbuffer config : register(b0) {
-    float3 TransparentColor;   // (1,0,1) für Magenta
-    float  Opacity;             // 0..1, pre-multiplied auf RGB+A
-    uint   RectX;
-    uint   RectY;
-    uint   RectW;
-    uint   RectH;
-    float  HighlightOn;         // 0=aus, 1=Border zeichnen (B5)
-    float  BorderPx;            // Rahmenstärke in Pixeln
-    float  _pad0;
-    float  _pad_align;
-    float3 HighlightColor;      // RGB des B5-Rahmens
-    float  _pad1;
-};
-Texture2D in_texture : register(t0);
-RWTexture2D<float4> out_texture : register(u0);
-
-[numthreads(8, 8, 1)]
-void main(uint2 tid : SV_DispatchThreadID)
-{
-    if (tid.x >= RectW || tid.y >= RectH) return;
-    uint2 pos = uint2(RectX + tid.x, RectY + tid.y);
-
-    if (HighlightOn > 0.5) {
-        uint bx = (uint)BorderPx;
-        if (tid.x < bx || tid.y < bx ||
-            tid.x >= RectW - bx || tid.y >= RectH - bx) {
-            out_texture[pos] = float4(HighlightColor, 1.0);
-            return;
-        }
-    }
-
-    // C4 Alpha-Pfad (4.6.2026): WGC liefert von einer transparent:true
-    // BrowserWindow eine Surface mit nativem Alpha-Kanal. Chromium gibt
-    // pre-multiplied alpha aus — wir multiplizieren nur noch den User-
-    // Opacity-Slider drauf.
-    //
-    // Wenn der Pfad nicht klappt (WGC liefert immer noch opake Bytes oder
-    // schwarzen Frame), siehst du das im HMD: alle Pixel hängen — dann
-    // zurück auf Chroma-Key (siehe git history: soft chroma + un-mix).
-    float4 src = in_texture[pos];
-    out_texture[pos] = float4(src.rgb * Opacity, src.a * Opacity);
-}
-)HLSL";
-
-    // Spiegel der HLSL-cbuffer-Struktur. HLSL packt cbuffers in 16-Byte-Rows
-    // — Reihenfolge im C++ muss 1:1 dem Shader entsprechen.
-    struct ChromaConstants {
-        float    transparentColor[3];   // 12     ┐ row 0
-        float    opacity;                //  4    ┘
-        uint32_t rectX;                  //  4    ┐
-        uint32_t rectY;                  //  4    │ row 1
-        uint32_t rectW;                  //  4    │
-        uint32_t rectH;                  //  4    ┘
-        float    highlightOn;            //  4    ┐
-        float    borderPx;               //  4    │ row 2
-        float    pad0;                   //  4    │
-        float    padAlign;               //  4    ┘
-        float    highlightColor[3];      // 12    ┐ row 3
-        float    pad1;                   //  4    ┘
-    };
-    static_assert(sizeof(ChromaConstants) == 64, "ChromaConstants must be 64 bytes (4 × 16B HLSL rows)");
 
     class OpenXrLayer : public openxr_api_layer::OpenXrApi {
       public:
@@ -270,57 +181,26 @@ void main(uint2 tid : SV_DispatchThreadID)
             if (!m_stallThreadStarted) {
                 m_stallThreadStarted = true;
                 StartStallWatchdog();
-                // C (3.7.2026): WGC-Capture-Rate deckeln. BEEHIVE_CAPTURE_HZ=<n> setzt die
-                // Ziel-Capture-Rate (Default 30 Hz). =0 schaltet den Throttle ab (jeder
-                // Frame gepullt = Alt-Verhalten, für A/B-Baseline). Adressiert die am 3.7.
-                // per XRFrameTools gemessene Ursache: WGC-Capture stallt in iRacings
-                // GPU-Leerlauf-Lücken bei leichter Last. Quad-Pose bleibt voll-rate.
-                {
-                    int captureHz = 30;   // Default: Throttle an
-                    if (const char* e = std::getenv("BEEHIVE_CAPTURE_HZ")) captureHz = std::atoi(e);
-                    m_captureMinPullNs = (captureHz > 0) ? (1000000000LL / captureHz) : 0;
-                    Log(fmt::format("C: WGC-Capture-Throttle = {} Hz (minPull={} ns; 0=aus)\n",
-                                    captureHz, m_captureMinPullNs));
-                    // C2 (8.7.2026): DWM-seitige Capture-Drossel via
-                    // GraphicsCaptureSession.MinUpdateInterval (24H2+/Build 26100+). C drosselt
-                    // nur unser Abholen — der DWM blittete (24H2-Verhalten „ständig neue
-                    // Frames", vgl. OpenKneeboard v1.10.16) trotzdem voll-rate in die
-                    // Pool-Surfaces auf iRacings Device. C2 drosselt die PRODUKTION.
-                    // BEEHIVE_DWM_CAPTURE_HZ=<n> (Default = BEEHIVE_CAPTURE_HZ, =0 aus).
-                    // Angewendet wird der Wert beim Capture-Attach (Session-Property).
-                    int dwmHz = captureHz; // Default: gleiche Rate wie C (HZ=0-Baseline schaltet beide ab)
-                    if (const char* e = std::getenv("BEEHIVE_DWM_CAPTURE_HZ")) dwmHz = std::atoi(e);
-                    m_captureMinUpdateNs = (dwmHz > 0) ? (1000000000LL / dwmHz) : 0;
-                    Log(fmt::format("C2: DWM-MinUpdateInterval-Ziel = {} Hz (minUpdate={} ns; 0=aus)\n",
-                                    dwmHz, m_captureMinUpdateNs));
-
-                    // D1 (8.7.2026): externer Capture-Pfad — capture-host.exe macht
-                    // WGC+Compose in EIGENEM Prozess (eigene WDDM-Allokationen), der
-                    // Layer kopiert nur noch fertige Shared-Texturen (Fence-gecheckt,
-                    // Keyed-Mutex non-blocking). Phase 3: Default AUS, Kill-Switch-Ära.
-                    if (const char* e = std::getenv("BEEHIVE_EXTERNAL_CAPTURE"))
-                        m_externalCapture = std::atoi(e) == 1;
-                    Log(m_externalCapture
-                            ? "D1: Capture-Modus = EXTERN (capture-host, Shared-Texture-Handoff)\n"
-                            : "D1: Capture-Modus = intern (Layer-WGC, klassisch)\n");
-
-                    // HL-Block IMMER anlegen (auch im internen Modus, harmlos): der
-                    // Helper braucht layerPid daraus als Handle-Duplikations-Ziel,
-                    // und Hover/Grab-Zustand für die Border im externen Compose.
-                    m_hlMapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr,
-                                                     PAGE_READWRITE, 0,
-                                                     sizeof(beehive::shm::HighlightSlot),
-                                                     beehive::shm::kHighlightMappingName);
-                    if (m_hlMapping) {
-                        m_hlView = MapViewOfFile(m_hlMapping, FILE_MAP_WRITE, 0, 0,
-                                                 sizeof(beehive::shm::HighlightSlot));
-                        if (m_hlView) {
-                            std::memset(m_hlView, 0, sizeof(beehive::shm::HighlightSlot));
-                            Log("D1: HL-Mapping bereit (Local\\BeeHiveVR_HL)\n");
-                        } else {
-                            CloseHandle(m_hlMapping);
-                            m_hlMapping = nullptr;
-                        }
+                // Der capture-host macht WGC+Compose in EIGENEM Prozess (eigene WDDM-
+                // Allokationen); der Layer kopiert nur noch fertige Shared-Texturen aus
+                // TexOut (Fence-gecheckt, Keyed-Mutex non-blocking). Der frühere
+                // In-Layer-WGC/Chroma-Pfad ist entfernt (v0.10.0-Cleanup).
+                //
+                // HL-Block anlegen: der capture-host braucht layerPid daraus als
+                // Handle-Duplikations-Ziel, und Hover/Grab-Zustand für die Border im Compose.
+                m_hlMapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr,
+                                                 PAGE_READWRITE, 0,
+                                                 sizeof(beehive::shm::HighlightSlot),
+                                                 beehive::shm::kHighlightMappingName);
+                if (m_hlMapping) {
+                    m_hlView = MapViewOfFile(m_hlMapping, FILE_MAP_WRITE, 0, 0,
+                                             sizeof(beehive::shm::HighlightSlot));
+                    if (m_hlView) {
+                        std::memset(m_hlView, 0, sizeof(beehive::shm::HighlightSlot));
+                        Log("D1: HL-Mapping bereit (Local\\BeeHiveVR_HL)\n");
+                    } else {
+                        CloseHandle(m_hlMapping);
+                        m_hlMapping = nullptr;
                     }
                 }
             }
@@ -362,43 +242,9 @@ void main(uint2 tid : SV_DispatchThreadID)
             // EnsureSetup is idempotent — it keeps trying every frame until
             // Electron has populated the FrameSlot and our swapchain is built.
             if (EnsureSetup()) {
-                // 17.6.2026 — Atlas-Restart-Re-Attach. Beim Neustart der App während
-                // iRacing läuft erzeugt der neue Atlas-Prozess ein neues BrowserWindow
-                // (neues hwnd + producerPid). Ohne Re-Attach captured WGC weiter das
-                // tote alte HWND → Standbild — der generation-Watchdog merkt es NICHT,
-                // weil der neue Atlas die generation munter weiterzählt; neue Quad-Rects
-                // gegen die alte Textur wirken zudem „vertauscht". Hwnd/PID-Wechsel
-                // erkennen → nur die WGC-Session neu aufsetzen (Swapchain/Space bleiben;
-                // der Resize-Check unten passt die Swapchain an, falls die neue Quelle
-                // eine andere Größe hat). Doppel-Read-Guard gegen torn slot (analog zur
-                // Recenter-Probe). Bei ctor-Fehler hwnd/pid NICHT übernehmen → die
-                // Bedingung bleibt wahr → der nächste Frame versucht es erneut.
-                if (m_mapView && m_captureWindow) {
-                    FrameSlot a{}, b{};
-                    std::memcpy(&a, m_mapView, sizeof(a));
-                    std::memcpy(&b, m_mapView, sizeof(b));
-                    const HWND newHwnd = (HWND)(uintptr_t)a.hwnd;
-                    if (a.producerPid == b.producerPid && a.hwnd == b.hwnd &&
-                        a.generation != 0 && a.hwnd != 0 &&
-                        (newHwnd != m_capturedHwnd || a.producerPid != m_capturedPid)) {
-                        Log(fmt::format("xrEndFrame: Atlas restart (hwnd 0x{:x}->0x{:x}, pid {}->{}) — WGC re-attach\n",
-                                        (uintptr_t)m_capturedHwnd, a.hwnd, m_capturedPid, a.producerPid));
-                        SetXefPhase(XefPhase::ReAttach);
-                        m_captureWindow.reset();
-                        try {
-                            m_captureWindow =
-                                std::make_unique<capture::CaptureWindowWinRT>(m_appDevice, newHwnd);
-                            m_captureWindow->setMinPullIntervalNs(m_captureMinPullNs);  // C
-                            if (!m_captureWindow->setMinUpdateIntervalNs(m_captureMinUpdateNs))  // C2
-                                Log("C2: MinUpdateInterval nicht verfügbar (Windows < 24H2) — DWM-Drossel aus\n");
-                            m_capturedHwnd = newHwnd;
-                            m_capturedPid  = a.producerPid;
-                        } catch (const winrt::hresult_error& e) {
-                            Log(fmt::format("xrEndFrame: re-attach failed hr=0x{:08x} ({}) — retry next frame\n",
-                                            (uint32_t)e.code().value, winrt::to_string(e.message())));
-                        }
-                    }
-                }
+                // Atlas-Restart (neuer Prozess/Textur) handhabt jetzt der capture-host
+                // (OSR: neuer frameCounter/pid) — der Layer konsumiert nur TexOut, kein
+                // eigenes Re-Attach mehr nötig.
 
                 // B7 (5.6.2026): Recenter-Trigger aus Electron. Atlas inkrementiert
                 // recenterEpoch pro WPF-Recenter-Keybind; bei Wechsel bauen wir
@@ -475,34 +321,9 @@ void main(uint2 tid : SV_DispatchThreadID)
                 }
 
                 SetXefPhase(XefPhase::Texture);
-                // D1: im externen Modus kommt die Textur aus dem capture-host-Ring
-                // (Fence-Check + Reopen/Resize in ProcessExternalPerFrame); der
-                // interne WGC-Pfad bleibt vollständig erhalten (Kill-Switch-Ära).
-                bool extReady = false;
-                ID3D11Texture2D* currentTex = nullptr;
-                if (m_externalCapture) {
-                    extReady = ProcessExternalPerFrame();
-                } else {
-                currentTex = GetCurrentTexture();
-                if (currentTex) {
-                    // C3b (4.6.2026): Atlas-BrowserWindow wächst dynamisch wenn
-                    // WPF mehr/größere Sources schickt. WGC's CaptureWindowWinRT
-                    // recreated den FramePool intern (siehe utils/capture.h), wir
-                    // müssen die OpenXR-Swapchain + Chroma-Intermediate-Tex an die
-                    // neue Quell-Größe anpassen. Surface-Pointer-Wechsel allein
-                    // (Frame-Pool-Rotation) ist HARMLOS — der Pfad weiter unten
-                    // cached den SRV per Pointer und baut nur bei Wechsel neu.
-                    D3D11_TEXTURE2D_DESC desc{};
-                    currentTex->GetDesc(&desc);
-                    if (desc.Width != m_texWidth || desc.Height != m_texHeight) {
-                        Log(fmt::format("xrEndFrame: WGC source resized {}x{} -> {}x{}, rebuilding swapchain\n",
-                                        m_texWidth, m_texHeight, desc.Width, desc.Height));
-                        if (!RebuildSwapchainForNewSize(desc.Width, desc.Height)) {
-                            currentTex = nullptr;   // skip this frame, retry next
-                        }
-                    }
-                }
-                } // Ende interner Texture-Zweig — D1
+                // Die Textur kommt aus dem capture-host-Ring (Fence-Check +
+                // Reopen/Resize in ProcessExternalPerFrame).
+                bool extReady = ProcessExternalPerFrame();
                 // F5 (6.6.2026): Publisher-Liveness vor dem Composen prüfen.
                 // FrameSlot.generation muss innerhalb kWatchdogStaleFrames
                 // bumpen, sonst gilt Atlas als tot → wir composen keine Quads
@@ -533,12 +354,9 @@ void main(uint2 tid : SV_DispatchThreadID)
                     }
                 }
 
-                if (m_externalCapture ? (extReady && publisherAlive)
-                                      : (currentTex && publisherAlive)) {
+                if (extReady && publisherAlive) {
                     SetXefPhase(XefPhase::Compose);
-                    const uint32_t n = m_externalCapture
-                                           ? RenderAtlasQuadsExternal(quadStorage.data())
-                                           : RenderAtlasQuads(currentTex, quadStorage.data());
+                    const uint32_t n = RenderAtlasQuadsExternal(quadStorage.data());
                     for (uint32_t i = 0; i < n; ++i) {
                         layers.push_back(
                             reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quadStorage[i]));
@@ -687,69 +505,15 @@ void main(uint2 tid : SV_DispatchThreadID)
             // (b) Peek at the slot. If Electron hasn't written yet, just wait.
             FrameSlot slot{};
             memcpy(&slot, m_mapView, sizeof(slot));
-            // OSR (D2): kein Fenster → slot.hwnd == 0 ist GÜLTIG. hwnd nur im WGC-
-            // Modus verlangen (dort ist es das Capture-Ziel); extern/OSR nutzt TexOut,
-            // width/height/generation/pid reichen als Validität. Sonst hängt der Setup
-            // im OSR-Modus ewig auf „waiting for first valid FrameSlot".
-            if (slot.generation == 0 || slot.producerPid == 0 || !slot.width || !slot.height ||
-                (!m_externalCapture && slot.hwnd == 0)) {
+            // OSR (D2): kein Fenster → slot.hwnd == 0 ist GÜLTIG. Der Layer nutzt
+            // TexOut vom capture-host; width/height/generation/pid reichen als Validität.
+            if (slot.generation == 0 || slot.producerPid == 0 || !slot.width || !slot.height) {
                 return false;
             }
 
-            // D1 (8.7.2026): im externen Modus liefert capture-host die fertige
-            // Textur — hier nur TexOut öffnen + Shared-Handles importieren; die
-            // WGC-Schritte (c)+(d) entfallen komplett (kein WinRT im Spielprozess).
-            if (m_externalCapture) {
-                if (!EnsureExternalSource()) return false;
-            } else {
-            // (c) Start WGC capture against Electron's window — ONCE. The
-            //     ctor builds an interop D3D11 device wrapping our app device,
-            //     creates a free-threaded frame pool, and starts the session.
-            //     Re-entrancy guard: if EnsureSetup later returns false (e.g.
-            //     WGC needs another frame to deliver), the same session keeps
-            //     running on subsequent xrEndFrame calls.
-            if (!m_captureWindow) {
-                Log(fmt::format("setup: first slot gen={} pid={} hwnd=0x{:x} {}x{} fmt={}\n",
-                                slot.generation, slot.producerPid, slot.hwnd,
-                                slot.width, slot.height, slot.format));
-                m_capturedHwnd = (HWND)(uintptr_t)slot.hwnd;
-                m_capturedPid  = slot.producerPid;
-                try {
-                    m_captureWindow =
-                        std::make_unique<capture::CaptureWindowWinRT>(m_appDevice, m_capturedHwnd);
-                    m_captureWindow->setMinPullIntervalNs(m_captureMinPullNs);  // C
-                    if (!m_captureWindow->setMinUpdateIntervalNs(m_captureMinUpdateNs))  // C2
-                        Log("C2: MinUpdateInterval nicht verfügbar (Windows < 24H2) — DWM-Drossel aus\n");
-                } catch (const winrt::hresult_error& e) {
-                    Log(fmt::format("setup: CaptureWindowWinRT ctor failed hr=0x{:08x} ({})\n",
-                                    (uint32_t)e.code().value,
-                                    winrt::to_string(e.message())));
-                    m_capturedHwnd = nullptr;
-                    return false;
-                }
-            }
-
-            // (d) Wait for the first captured frame before sizing our swapchain.
-            //     WGC reports the source size on the GraphicsCaptureItem but the
-            //     first TryGetNextFrame can return nullptr for ~1-2 frames after
-            //     StartCapture. Pull until we have something, then take that
-            //     surface's actual dimensions.
-            ID3D11Texture2D* firstFrame = m_captureWindow->getSurface();
-            if (!firstFrame) {
-                if (!m_loggedAwaitingFrame) {
-                    Log("setup: WGC capture session created, awaiting first frame\n");
-                    m_loggedAwaitingFrame = true;
-                }
-                return false;
-            }
-            D3D11_TEXTURE2D_DESC desc{};
-            firstFrame->GetDesc(&desc);
-            m_texWidth  = desc.Width;
-            m_texHeight = desc.Height;
-            m_texFormat = desc.Format;
-            Log(fmt::format("setup: first WGC frame received {}x{} fmt={}\n",
-                            m_texWidth, m_texHeight, (int)m_texFormat));
-            } // Ende interner (WGC-)Setup-Zweig — D1
+            // capture-host liefert die fertige Textur — hier nur TexOut öffnen +
+            // Shared-Handles importieren (kein WinRT im Spielprozess).
+            if (!EnsureExternalSource()) return false;
 
             // (e) ReferenceSpace LOCAL — fixed quad pose.
             XrReferenceSpaceCreateInfo rsi{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
@@ -802,81 +566,7 @@ void main(uint2 tid : SV_DispatchThreadID)
             Log(fmt::format("setup: swapchain {}x{} sourceFmt={} swapFmt={} imageCount={} — quad live\n",
                             m_texWidth, m_texHeight, (int)m_texFormat, (int)swapFormat, imageCount));
             m_swapchainReady = true;
-
-            // (g) Chroma-Key Compute-Pipeline bauen. Fehler hier sind nicht fatal —
-            //     m_chromaReady=false fällt im Per-Frame-Path zurück auf CopyResource
-            //     (alte Pipeline, kein Chroma-Key, dafür sicher passierbarer Magenta-bg).
-            //     D1: im externen Modus komponiert der capture-host — keine Pipeline hier.
-            if (!m_externalCapture) SetupChromaPipeline();
             return true;
-        }
-
-        // C4: Compute-Shader + Intermediate-UAV-Textur einmalig bauen.
-        // Source-SRV wird lazy pro Frame gecached (Pointer wechselt mit WGC).
-        void SetupChromaPipeline() {
-            ComPtr<ID3DBlob> shaderBlob, errorBlob;
-            HRESULT hr = D3DCompile(
-                kChromaKeyHlsl, std::strlen(kChromaKeyHlsl),
-                "chroma_key.hlsl", nullptr, nullptr,
-                "main", "cs_5_0",
-                D3DCOMPILE_OPTIMIZATION_LEVEL3, 0,
-                &shaderBlob, &errorBlob);
-            if (FAILED(hr)) {
-                const char* msg = errorBlob ? (const char*)errorBlob->GetBufferPointer() : "(no error blob)";
-                Log(fmt::format("chroma: D3DCompile failed hr=0x{:08x}: {}\n", (uint32_t)hr, msg));
-                return;
-            }
-            hr = m_appDevice->CreateComputeShader(
-                shaderBlob->GetBufferPointer(), shaderBlob->GetBufferSize(),
-                nullptr, &m_chromaShader);
-            if (FAILED(hr)) {
-                Log(fmt::format("chroma: CreateComputeShader failed hr=0x{:08x}\n", (uint32_t)hr));
-                return;
-            }
-
-            // Constant Buffer — DYNAMIC + WRITE_DISCARD damit wir pro Quad
-            // ohne Stall neu reinschreiben können.
-            D3D11_BUFFER_DESC cbd{};
-            cbd.ByteWidth      = sizeof(ChromaConstants);
-            cbd.Usage          = D3D11_USAGE_DYNAMIC;
-            cbd.BindFlags      = D3D11_BIND_CONSTANT_BUFFER;
-            cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-            hr = m_appDevice->CreateBuffer(&cbd, nullptr, &m_chromaCB);
-            if (FAILED(hr)) {
-                Log(fmt::format("chroma: CreateBuffer (CB) failed hr=0x{:08x}\n", (uint32_t)hr));
-                return;
-            }
-
-            // Intermediate-Textur: gleicher Pixel-Inhalt wie Swapchain-Image,
-            // aber explizit als R8G8B8A8_UNORM angelegt damit wir eine UAV
-            // drauf binden können (UNORM_SRGB-UAV ist nicht supported).
-            // CopyResource zur UNORM_SRGB-Swapchain ist legal (TYPELESS-Familie).
-            D3D11_TEXTURE2D_DESC td{};
-            td.Width            = m_texWidth;
-            td.Height           = m_texHeight;
-            td.MipLevels        = 1;
-            td.ArraySize        = 1;
-            td.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
-            td.SampleDesc.Count = 1;
-            td.Usage            = D3D11_USAGE_DEFAULT;
-            td.BindFlags        = D3D11_BIND_UNORDERED_ACCESS;
-            hr = m_appDevice->CreateTexture2D(&td, nullptr, &m_intermediateTex);
-            if (FAILED(hr)) {
-                Log(fmt::format("chroma: CreateTexture2D (intermediate) failed hr=0x{:08x}\n", (uint32_t)hr));
-                return;
-            }
-            D3D11_UNORDERED_ACCESS_VIEW_DESC uavd{};
-            uavd.Format        = DXGI_FORMAT_R8G8B8A8_UNORM;
-            uavd.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-            hr = m_appDevice->CreateUnorderedAccessView(m_intermediateTex.Get(), &uavd, &m_intermediateUAV);
-            if (FAILED(hr)) {
-                Log(fmt::format("chroma: CreateUnorderedAccessView failed hr=0x{:08x}\n", (uint32_t)hr));
-                return;
-            }
-
-            m_chromaReady = true;
-            Log(fmt::format("chroma: pipeline ready ({}x{} intermediate UNORM, CS compiled)\n",
-                            m_texWidth, m_texHeight));
         }
 
         // C3b (4.6.2026): partieller Rebuild bei WGC-Source-Resize. Reuse Shader
@@ -921,43 +611,7 @@ void main(uint2 tid : SV_DispatchThreadID)
                 reinterpret_cast<XrSwapchainImageBaseHeader*>(images.data()));
             for (auto& img : images) m_swapchainTextures.push_back(img.texture);
 
-            // Intermediate-Tex an die neue Größe anpassen. Shader+CB sind
-            // size-unabhängig und bleiben drin. UAV wird durch Reset() der Tex
-            // auch nichtig (UAV hält Tex am Leben, nicht umgekehrt) — neu bauen.
-            m_intermediateTex.Reset();
-            m_intermediateUAV.Reset();
-            D3D11_TEXTURE2D_DESC td{};
-            td.Width            = m_texWidth;
-            td.Height           = m_texHeight;
-            td.MipLevels        = 1;
-            td.ArraySize        = 1;
-            td.Format           = DXGI_FORMAT_R8G8B8A8_UNORM;
-            td.SampleDesc.Count = 1;
-            td.Usage            = D3D11_USAGE_DEFAULT;
-            td.BindFlags        = D3D11_BIND_UNORDERED_ACCESS;
-            HRESULT hr = m_appDevice->CreateTexture2D(&td, nullptr, &m_intermediateTex);
-            if (FAILED(hr)) {
-                Log(fmt::format("resize: CreateTexture2D failed hr=0x{:08x}\n", (uint32_t)hr));
-                m_chromaReady = false;
-                return false;
-            }
-            D3D11_UNORDERED_ACCESS_VIEW_DESC uavd{};
-            uavd.Format        = DXGI_FORMAT_R8G8B8A8_UNORM;
-            uavd.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-            hr = m_appDevice->CreateUnorderedAccessView(m_intermediateTex.Get(), &uavd, &m_intermediateUAV);
-            if (FAILED(hr)) {
-                Log(fmt::format("resize: CreateUnorderedAccessView failed hr=0x{:08x}\n", (uint32_t)hr));
-                m_chromaReady = false;
-                return false;
-            }
-
-            // SRV-Cache invalidieren — der FramePool.Recreate() gibt vermutlich
-            // andere Texture-Pointer raus, RenderAtlasQuads würde sonst weiter
-            // den alten Cache-Key matchen und SRV nicht neu bauen.
-            m_chromaSourceSRV.Reset();
-            m_chromaSourceCachedPtr = nullptr;
-
-            Log(fmt::format("resize: swapchain + intermediate rebuilt {}x{}\n",
+            Log(fmt::format("resize: swapchain rebuilt {}x{}\n",
                             m_texWidth, m_texHeight));
             return true;
         }
@@ -1150,16 +804,6 @@ void main(uint2 tid : SV_DispatchThreadID)
             std::memcpy(m_hlView, &hl, sizeof(hl));
         }
 
-        // Returns the latest WGC-captured surface, or nullptr if the pool has
-        // not produced a frame this cycle. The CaptureWindowWinRT caches the
-        // last surface internally so consecutive calls without a fresh frame
-        // still return the previous one — that is the desired behaviour for
-        // VR (no holes, just a tiny re-show of the last frame).
-        ID3D11Texture2D* GetCurrentTexture() {
-            if (!m_captureWindow) return nullptr;
-            return m_captureWindow->getSurface();
-        }
-
         void Teardown() {
             m_swapchainReady = false;
             if (m_swapchain != XR_NULL_HANDLE) {
@@ -1196,8 +840,6 @@ void main(uint2 tid : SV_DispatchThreadID)
             m_actionSetsAttached = false;
             m_actionSpacesCreated = false;
             m_grabHand = -1;
-            m_captureWindow.reset();
-            m_capturedHwnd = nullptr;
             if (m_placeOutView)    { UnmapViewOfFile(m_placeOutView);    m_placeOutView = nullptr; }
             if (m_placeOutMapping) { CloseHandle(m_placeOutMapping);     m_placeOutMapping = nullptr; }
             if (m_mapView)         { UnmapViewOfFile(m_mapView);         m_mapView = nullptr; }
@@ -1219,7 +861,6 @@ void main(uint2 tid : SV_DispatchThreadID)
             m_loggedAwaitingHandles = false;
             m_texWidth = m_texHeight = 0;
             m_loggedNoMapping = false;
-            m_loggedAwaitingFrame = false;
             m_loggedHoldoff = false;
             m_loggedFirstQuads = false;
             m_placeModeOnLast = false;
@@ -1231,16 +872,6 @@ void main(uint2 tid : SV_DispatchThreadID)
             m_hoverEnteredTime = 0;
             std::memset(m_lastStableHoveredId, 0, 16);
             std::memset(m_publishedHoverField, 0, 16);
-            // Chroma-Pipeline (C4): ComPtrs lassen die D3D-Objekte beim Reset
-            // sauber los — m_chromaSourceCachedPtr ist raw, nur als Cache-Key.
-            m_chromaShader.Reset();
-            m_chromaCB.Reset();
-            m_intermediateTex.Reset();
-            m_intermediateUAV.Reset();
-            m_chromaSourceSRV.Reset();
-            m_chromaSourceCachedPtr = nullptr;
-            m_chromaReady = false;
-            m_loggedChromaError = false;
         }
 
         // ---------- Place-in-VR ------------------------------------------------
@@ -1843,246 +1474,10 @@ void main(uint2 tid : SV_DispatchThreadID)
                 && (s.rectY + s.rectH) <= m_texHeight;
         }
 
-        // ---------- Per-frame --------------------------------------------------
-        // Copy the atlas once, then emit one XrCompositionLayerQuad per visible
-        // QuadSlot. Returns the number of quads written to outQuads (≤ kMaxQuads).
-        uint32_t RenderAtlasQuads(ID3D11Texture2D* sourceTex, XrCompositionLayerQuad* outQuads) {
-            // Read the slot snapshot once: handle/quadCount/array.
-            FrameSlot frame{};
-            std::array<QuadSlot, kMaxQuads> slots{};
-            memcpy(&frame, m_mapView, sizeof(frame));
-            const uint32_t requested = std::min<uint32_t>(frame.quadCount, kMaxQuads);
-            if (requested > 0) {
-                memcpy(slots.data(),
-                       (const std::byte*)m_mapView + sizeof(FrameSlot),
-                       requested * sizeof(QuadSlot));
-            }
-
-            // Acquire / wait the next swapchain image, copy atlas, release.
-            XrSwapchainImageAcquireInfo ai{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-            uint32_t imageIndex = 0;
-            XrResult xr = OpenXrApi::xrAcquireSwapchainImage(m_swapchain, &ai, &imageIndex);
-            if (XR_FAILED(xr)) {
-                if (!m_loggedAcquireFail) {
-                    Log(fmt::format("frame: xrAcquireSwapchainImage res={}\n", (int)xr));
-                    m_loggedAcquireFail = true;
-                }
-                return 0;
-            }
-            XrSwapchainImageWaitInfo wi{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
-            wi.timeout = XR_INFINITE_DURATION;
-            xr = OpenXrApi::xrWaitSwapchainImage(m_swapchain, &wi);
-            if (XR_FAILED(xr)) {
-                Log(fmt::format("frame: xrWaitSwapchainImage res={}\n", (int)xr));
-                return 0;
-            }
-
-            ID3D11Texture2D* dst = m_swapchainTextures[imageIndex];
-
-            if (m_chromaReady) {
-                // C4 Chroma-Key + B10 Opacity: pro sichtbarem Quad ein Dispatch
-                // über seinen Sub-Rect ins Intermediate, danach einmal Copy ins
-                // SRGB-Swapchain-Image. Source-SRV nach Pointer cachen (WGC
-                // rotiert die Surfaces im Frame-Pool).
-                if (sourceTex != m_chromaSourceCachedPtr) {
-                    m_chromaSourceSRV.Reset();
-                    D3D11_SHADER_RESOURCE_VIEW_DESC srvd{};
-                    srvd.Format              = DXGI_FORMAT_R8G8B8A8_UNORM;
-                    srvd.ViewDimension       = D3D11_SRV_DIMENSION_TEXTURE2D;
-                    srvd.Texture2D.MipLevels = 1;
-                    const HRESULT hrSrv = m_appDevice->CreateShaderResourceView(
-                        sourceTex, &srvd, &m_chromaSourceSRV);
-                    if (FAILED(hrSrv)) {
-                        if (!m_loggedChromaError) {
-                            Log(fmt::format("chroma: CreateShaderResourceView (WGC src) hr=0x{:08x}\n",
-                                            (uint32_t)hrSrv));
-                            m_loggedChromaError = true;
-                        }
-                        // Fallback auf CopyResource — wenigstens Bild im VR (mit Magenta).
-                        m_appContext->CopyResource(dst, sourceTex);
-                        goto release_swapchain_image;
-                    }
-                    m_chromaSourceCachedPtr = sourceTex;
-                }
-
-                ID3D11ShaderResourceView* srvs[] = { m_chromaSourceSRV.Get() };
-                ID3D11UnorderedAccessView* uavs[] = { m_intermediateUAV.Get() };
-                ID3D11Buffer* cbs[] = { m_chromaCB.Get() };
-                m_appContext->CSSetShader(m_chromaShader.Get(), nullptr, 0);
-                m_appContext->CSSetShaderResources(0, 1, srvs);
-                m_appContext->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-                m_appContext->CSSetConstantBuffers(0, 1, cbs);
-
-                for (uint32_t i = 0; i < requested; ++i) {
-                    const QuadSlot& s = slots[i];
-                    if (!s.visible) continue;
-                    if (!QuadRectFitsAtlas(s)) continue;
-
-                    D3D11_MAPPED_SUBRESOURCE mapped{};
-                    if (FAILED(m_appContext->Map(m_chromaCB.Get(), 0,
-                                                  D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-                        continue;
-                    }
-                    ChromaConstants* cb = (ChromaConstants*)mapped.pData;
-                    cb->transparentColor[0] = 1.0f;
-                    cb->transparentColor[1] = 0.0f;
-                    cb->transparentColor[2] = 1.0f;
-                    cb->opacity        = s.opacity;
-                    cb->rectX          = s.rectX;
-                    cb->rectY          = s.rectY;
-                    cb->rectW          = s.rectW;
-                    cb->rectH          = s.rectH;
-                    // Phase 2 (5.6.2026): Border-Highlight pro Quad.
-                    // - Grabbed (= aktiv gedragt) → cyan, 4 px
-                    // - Hovered (= Aim trifft, kein Grab) → weiß, 2 px
-                    // - Place-Mode ON (5.6.2026 v2): grüner 2 px auf allen Quads
-                    //   als „bereit für Trigger"-Indikator. User-Feedback statt
-                    //   Raten ob OpenXR-Session focused ist (xrSyncActions
-                    //   liefert in iRacing-Loading-Screen still NOT_FOCUSED).
-                    // - Sonst → off. HLSL zeichnet einen Rahmen am Rect-
-                    //   Rand wenn HighlightOn > 0.5 (Compute-Pfad in
-                    //   kChromaKeyHlsl Z. 81-88).
-                    const bool isGrabbed = m_grabHand != -1
-                        && std::memcmp(s.id, m_grabTargetId, 16) == 0;
-                    const bool isHovered = !isGrabbed && m_hoveredHand != -1
-                        && std::memcmp(s.id, m_hoveredId, 16) == 0;
-                    const bool isPlaceModeOn = frame.placeModeOn != 0;
-                    if (isGrabbed) {
-                        // 5.6.2026 v3: 3 px (war 4 px) — Stufung 1/2/3 zwischen
-                        // Mode-On/Hover/Grab bleibt erkennbar ohne dass der
-                        // Grab-Border das Widget zu sehr einquetscht.
-                        cb->highlightOn = 1.0f;
-                        cb->borderPx    = 3.0f;
-                        cb->highlightColor[0] = 0.0f;
-                        cb->highlightColor[1] = 1.0f;
-                        cb->highlightColor[2] = 1.0f;
-                    } else if (isHovered) {
-                        cb->highlightOn = 1.0f;
-                        cb->borderPx    = 2.0f;
-                        cb->highlightColor[0] = 1.0f;
-                        cb->highlightColor[1] = 1.0f;
-                        cb->highlightColor[2] = 1.0f;
-                    } else if (isPlaceModeOn) {
-                        // 5.6.2026 v3: 1 px (war 2 px) + gedämpftes Grün
-                        // (0,0.55,0 statt 0,1,0). Indikator dass Place-Mode
-                        // aktiv ist soll dezent bleiben, sonst lenken alle
-                        // leuchtenden Quads beim Setup zu stark ab.
-                        cb->highlightOn = 1.0f;
-                        cb->borderPx    = 1.0f;
-                        cb->highlightColor[0] = 0.0f;
-                        cb->highlightColor[1] = 0.55f;
-                        cb->highlightColor[2] = 0.0f;
-                    } else {
-                        cb->highlightOn = 0.0f;
-                        cb->borderPx    = 0.0f;
-                        cb->highlightColor[0] = 0.0f;
-                        cb->highlightColor[1] = 0.0f;
-                        cb->highlightColor[2] = 0.0f;
-                    }
-                    cb->pad0           = 0.0f;
-                    cb->padAlign       = 0.0f;
-                    cb->pad1           = 0.0f;
-                    m_appContext->Unmap(m_chromaCB.Get(), 0);
-
-                    m_appContext->Dispatch((s.rectW + 7) / 8, (s.rectH + 7) / 8, 1);
-                }
-
-                // Pipeline aufräumen — SRV/UAV bleiben sonst gebunden und können
-                // bei späteren Render-Operationen Konflikte werfen.
-                ID3D11ShaderResourceView* nullSRV[] = { nullptr };
-                ID3D11UnorderedAccessView* nullUAV[] = { nullptr };
-                m_appContext->CSSetShaderResources(0, 1, nullSRV);
-                m_appContext->CSSetUnorderedAccessViews(0, 1, nullUAV, nullptr);
-                m_appContext->CSSetShader(nullptr, nullptr, 0);
-
-                m_appContext->CopyResource(dst, m_intermediateTex.Get());
-            } else {
-                // Fallback (Chroma-Setup hat nicht geklappt): wie vor C4 —
-                // Bild kommt durch, aber mit Magenta-Bereichen.
-                m_appContext->CopyResource(dst, sourceTex);
-            }
-
-        release_swapchain_image:
-            XrSwapchainImageReleaseInfo ri{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-            xr = OpenXrApi::xrReleaseSwapchainImage(m_swapchain, &ri);
-            if (XR_FAILED(xr)) {
-                Log(fmt::format("frame: xrReleaseSwapchainImage res={}\n", (int)xr));
-                return 0;
-            }
-
-            // Build one quad descriptor per visible slot. While a grab is
-            // active we apply the layer-local pose override for that id so the
-            // visual matches the controller motion immediately (the round-trip
-            // through Electron + WPF + back into the FrameSlot is too laggy
-            // for direct-manipulation UX).
-            uint32_t written = 0;
-            uint32_t skippedOutOfRange = 0;
-            for (uint32_t i = 0; i < requested; ++i) {
-                QuadSlot s = slots[i];
-                if (!s.visible) continue;
-                // C3b (4.6.2026): drop quads whose rect doesn't fit our current
-                // swapchain. WPF can race ahead of the WGC FramePool.Recreate()
-                // when the atlas window grows — for one or two frames the layer
-                // still sees the old surface size while the FrameSlot already
-                // carries the post-pack rects. Submitting an imageRect outside
-                // the swapchain returns XR_ERROR_SWAPCHAIN_RECT_INVALID from
-                // xrEndFrame, which black-screens the whole iRacing session and
-                // wedges the desktop with a TDR. Skipping the offending quads
-                // for one frame is invisible (next frame WGC catches up).
-                if (!QuadRectFitsAtlas(s)) { ++skippedOutOfRange; continue; }
-                if (m_grabHand != -1 && std::strncmp(s.id, m_grabTargetId, 16) == 0) {
-                    s.posX = m_dragPosX; s.posY = m_dragPosY; s.posZ = m_dragPosZ;
-                    s.quatX = m_dragQuatX; s.quatY = m_dragQuatY;
-                    s.quatZ = m_dragQuatZ; s.quatW = m_dragQuatW;
-                    s.sizeW = m_dragSizeW; s.sizeH = m_dragSizeH;
-                    s.opacity = m_dragOpacity;  // live ALT-Drag (B10)
-                }
-                XrCompositionLayerQuad& q = outQuads[written++];
-                q.type = XR_TYPE_COMPOSITION_LAYER_QUAD;
-                q.next = nullptr;
-                q.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-                q.space = m_localSpace;
-                q.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-                q.subImage.swapchain = m_swapchain;
-                q.subImage.imageRect = {{(int32_t)s.rectX, (int32_t)s.rectY},
-                                        {(int32_t)s.rectW, (int32_t)s.rectH}};
-                q.subImage.imageArrayIndex = 0;
-                q.pose.position    = {s.posX, s.posY, s.posZ};
-                q.pose.orientation = {s.quatX, s.quatY, s.quatZ, s.quatW};
-                q.size             = {s.sizeW, s.sizeH};
-            }
-
-            // Diagnose-Throttle (C3b): wenn ein Rect-Resize-Race quads droppt,
-            // exactly einmal logge das pro neuem Skip-Count damit der User in
-            // engine.log sieht "rebuild kommt gleich". Nicht pro Frame loggen.
-            if (skippedOutOfRange != m_lastSkippedOutOfRange) {
-                Log(fmt::format("atlas: {} quad(s) skipped (rect > swapchain {}x{}) — waiting for WGC resize\n",
-                                skippedOutOfRange, m_texWidth, m_texHeight));
-                m_lastSkippedOutOfRange = skippedOutOfRange;
-            }
-
-            // Once-per-launch diagnostic so we see the layout the layer is honoring.
-            if (!m_loggedFirstQuads && written > 0) {
-                m_loggedFirstQuads = true;
-                Log(fmt::format("atlas: rendering {} quad(s), atlas={}x{}\n",
-                                written, frame.width, frame.height));
-                for (uint32_t i = 0; i < requested; ++i) {
-                    const QuadSlot& s = slots[i];
-                    char id[17] = {}; memcpy(id, s.id, 16);
-                    Log(fmt::format("  quad[{}] id='{}' rect=({},{},{},{}) "
-                                    "pos=({:.2f},{:.2f},{:.2f}) size=({:.2f}x{:.2f})m visible={}\n",
-                                    i, id, s.rectX, s.rectY, s.rectW, s.rectH,
-                                    s.posX, s.posY, s.posZ, s.sizeW, s.sizeH, s.visible));
-                }
-            }
-            return written;
-        }
-
-        // D1 (8.7.2026): externes Pendant zu RenderAtlasQuads. Acquire/Wait/
-        // Release-Muster und Quad-Emission BYTE-IDENTISCH zum internen Pfad
-        // (VDXR-Lehre 1.7.: daran wird nie geschraubt) — nur die Mitte ist statt
-        // Chroma-Dispatch ein einziges CopyResource aus dem Shared-Ring, gated
-        // durch Keyed-Mutex AcquireSync(0, timeout=0) (Route-A-Lehre: Consumer-
+        // D1 (8.7.2026): Per-Frame-Compose des externen Pfads. Acquire/Wait/Release-
+        // Muster und Quad-Emission sind VDXR-kritisch (Lehre 1.7.: daran wird nie
+        // geschraubt) — die Mitte ist ein einziges CopyResource aus dem Shared-Ring,
+        // gated durch Keyed-Mutex AcquireSync(0, timeout=0) (Route-A-Lehre: Consumer-
         // Timeout zwingend 0, NIE blockieren). Schlägt Acquire fehl (Helper
         // schreibt gerade genau diesen Buffer), versuchen wir lastGood; schlägt
         // auch das fehl, bleibt das acquired Image un-kopiert (zeigt ein ~3 Frames
@@ -2398,13 +1793,6 @@ void main(uint2 tid : SV_DispatchThreadID)
         void*  m_mapView{nullptr};
         bool   m_loggedNoMapping{false};
 
-        // WGC capture against Electron's BrowserWindow HWND. The session
-        // started by CaptureWindowWinRT owns a free-threaded frame pool and
-        // produces ID3D11Texture2D surfaces on the device we hand in.
-        std::unique_ptr<capture::ICaptureWindow> m_captureWindow;
-        HWND m_capturedHwnd{nullptr};
-        uint32_t m_capturedPid{0};   // Atlas producerPid → Restart-Erkennung (Re-Attach)
-
         // Place-in-VR.
         XrActionSet m_inputActionSet{XR_NULL_HANDLE};
         XrAction    m_aimAction{XR_NULL_HANDLE};
@@ -2442,7 +1830,6 @@ void main(uint2 tid : SV_DispatchThreadID)
         // Quad pipeline state.
         bool m_swapchainReady{false};
         bool m_loggedAcquireFail{false};
-        bool m_loggedAwaitingFrame{false};
         bool m_loggedHoldoff{false};
         bool m_loggedFirstQuads{false};
         // Phase 1: edge-detection für „Place mode ON/OFF" Log-Zeile.
@@ -2516,11 +1903,8 @@ void main(uint2 tid : SV_DispatchThreadID)
         std::thread           m_stallThread;
         std::atomic<bool>     m_stallThreadStop{false};
         bool                  m_stallThreadStarted{false};
-        int64_t               m_captureMinPullNs{0};  // C: WGC-Capture-Throttle (BEEHIVE_CAPTURE_HZ), 0=aus
-        int64_t               m_captureMinUpdateNs{0}; // C2: DWM-MinUpdateInterval (BEEHIVE_DWM_CAPTURE_HZ), 0=aus
 
-        // D1 (8.7.2026): externer Capture-Pfad (capture-host, BEEHIVE_EXTERNAL_CAPTURE).
-        bool                  m_externalCapture{false};
+        // D1 (8.7.2026): externer Capture-Pfad (capture-host liefert TexOut).
         HANDLE                m_hlMapping{nullptr};      // Local\BeeHiveVR_HL (wir = Writer)
         void*                 m_hlView{nullptr};
         uint64_t              m_hlGeneration{0};
@@ -2543,26 +1927,6 @@ void main(uint2 tid : SV_DispatchThreadID)
         bool                  m_loggedAwaitingHandles{false};
         XrSwapchain m_swapchain{XR_NULL_HANDLE};
         std::vector<ID3D11Texture2D*> m_swapchainTextures; // runtime-owned
-
-        // C4 Chroma-Key Compute-Pipeline:
-        //   WGC-Source (UNORM, sRGB-encoded Bytes)
-        //     → Compute-Shader (Per-Quad Magenta-Key + Opacity)
-        //     → Intermediate-Tex (UNORM, UAV-bindbar)
-        //     → CopyResource zur Swapchain (UNORM_SRGB, gleiche TYPELESS-Familie)
-        //
-        // Intermediate-Tex weil UAVs auf UNORM_SRGB nicht supported sind —
-        // Compute schreibt UNORM, Swapchain interpretiert die Bytes als sRGB.
-        ComPtr<ID3D11ComputeShader>        m_chromaShader;
-        ComPtr<ID3D11Buffer>               m_chromaCB;
-        ComPtr<ID3D11Texture2D>            m_intermediateTex;
-        ComPtr<ID3D11UnorderedAccessView>  m_intermediateUAV;
-        // SRV auf die WGC-Source-Textur. WGC rotiert die Surface-Pointer
-        // (Frame-Pool), wir cachen die letzte SRV per Pointer und rebauen
-        // nur bei Wechsel — spart pro Frame eine CreateShaderResourceView.
-        ComPtr<ID3D11ShaderResourceView>   m_chromaSourceSRV;
-        ID3D11Texture2D*                   m_chromaSourceCachedPtr{nullptr};
-        bool                               m_chromaReady{false};
-        bool                               m_loggedChromaError{false};
     };
 
     OpenXrApi* GetInstance() {
