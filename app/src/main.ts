@@ -118,14 +118,14 @@ let atlasHeight = 256;
 
 // D2 (OSR-Pivot): Der Atlas rendert offscreen (offscreen+useSharedTexture), ohne
 // sichtbares Fenster; setFrameRate deckelt den Compositor (BEEHIVE_ATLAS_FPS,
-// Default 30). Der alte WGC-Fenster-Pfad ist entfernt (v0.10.0-Cleanup).
+// Default 30). Der alte WGC-Fenster-Pfad ist entfernt (v0.9.7-Cleanup).
 //
 // Window-Capture-Entkopplung (19.7.2026): Window-Quads werden vom capture-host
 // nativ per WGC auf die HWND gecaptured (er sieht auch Overlay-/Tool-Fenster, die
 // Chromiums desktopCapturer verschweigt) und direkt in den Ring komponiert. Der
 // Atlas baut dafür KEIN <video>/getUserMedia mehr — das spart den teuren
 // getSources-Auflösungsversuch (Ruckeln beim Start) und die 18-fps-Hover-Regression.
-// Der alte desktopCapturer-Pfad ist entfernt (v0.10.0-Cleanup).
+// Der alte desktopCapturer-Pfad ist entfernt (v0.9.7-Cleanup).
 const ATLAS_FPS = (() => {
   const n = parseInt(process.env.BEEHIVE_ATLAS_FPS || '', 10);
   return Number.isFinite(n) && n > 0 ? n : 30;

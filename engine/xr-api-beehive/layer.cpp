@@ -184,7 +184,7 @@ namespace openxr_api_layer {
                 // Der capture-host macht WGC+Compose in EIGENEM Prozess (eigene WDDM-
                 // Allokationen); der Layer kopiert nur noch fertige Shared-Texturen aus
                 // TexOut (Fence-gecheckt, Keyed-Mutex non-blocking). Der frühere
-                // In-Layer-WGC/Chroma-Pfad ist entfernt (v0.10.0-Cleanup).
+                // In-Layer-WGC/Chroma-Pfad ist entfernt (v0.9.7-Cleanup).
                 //
                 // HL-Block anlegen: der capture-host braucht layerPid daraus als
                 // Handle-Duplikations-Ziel, und Hover/Grab-Zustand für die Border im Compose.

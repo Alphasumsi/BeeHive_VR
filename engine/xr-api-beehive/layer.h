@@ -10,7 +10,7 @@
 namespace openxr_api_layer {
 
     const std::string LayerName = LAYER_NAME;
-    const std::string VersionString = "WGC-Pivot (0.1.0) — Cloaked Atlas + Window Capture";
+    const std::string VersionString = "OSR (0.9.7) — Offscreen Atlas + Native Window Capture";
 
     OpenXrApi* GetInstance();
 
