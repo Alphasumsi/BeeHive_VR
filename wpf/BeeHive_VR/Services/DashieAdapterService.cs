@@ -1017,12 +1017,14 @@ public sealed class DashieAdapterService
     {
         var id = Guid.NewGuid();
         var client = new Client { Ws = ws };
-        _clients[id] = client;
-        Logger.Info($"DashieAdapter: WS-Client verbunden ({_clients.Count} aktiv)");
+        bool registered = false;
 
         try
         {
-            // Pflicht: sofort initialState (mit aktuellem Snapshot + Status).
+            // initialState ZUERST senden, solange der Client noch NICHT in _clients
+            // ist — so zielt kein Broadcast/Telemetrie-Frame auf diesen Socket und
+            // der initialState-Send hat garantiert keine Konkurrenz (schließt das
+            // SendAsync-Race beim Connect strukturell aus).
             object? telemetrySnapshot = null;
             var snap = _latestTelemetryBytes;
             if (snap != null)
@@ -1043,6 +1045,11 @@ public sealed class DashieAdapterService
                     isDemoMode = false,
                 }
             }, ct);
+
+            // Jetzt erst für Live-Broadcasts sichtbar machen.
+            _clients[id] = client;
+            registered = true;
+            Logger.Info($"DashieAdapter: WS-Client verbunden ({_clients.Count} aktiv)");
 
             var buf = new byte[8192];
             while (!ct.IsCancellationRequested && ws.State == WebSocketState.Open)
@@ -1067,8 +1074,11 @@ public sealed class DashieAdapterService
         catch (WebSocketException) { }
         finally
         {
-            _clients.TryRemove(id, out _);
-            Logger.Info($"DashieAdapter: WS-Client getrennt ({_clients.Count} aktiv)");
+            if (registered)
+            {
+                _clients.TryRemove(id, out _);
+                Logger.Info($"DashieAdapter: WS-Client getrennt ({_clients.Count} aktiv)");
+            }
         }
     }
 
@@ -1127,34 +1137,43 @@ public sealed class DashieAdapterService
 
     // --- Versand (pro Client SendGate: nie zwei SendAsync gleichzeitig auf einem Socket) ---
 
-    private async Task SendJsonAsync(Client c, object payload, CancellationToken ct)
+    // EIN Sende-Kern pro Client. SendGate (SemaphoreSlim 1) serialisiert alle Sends
+    // auf einem Socket. WICHTIG: am eigentlichen SendAsync IMMER CancellationToken.None
+    // — ein gecancelter Token bricht einen bereits laufenden nativen Send ab und lässt
+    // den Socket "outstanding" zurück; der nächste Send wirft dann InvalidOperationException
+    // ("already one outstanding 'SendAsync'"). Jeder Fehler = diesen Frame still droppen,
+    // nie die Verbindung killen (früher fiel die InvalidOperationException durch den
+    // catch-Filter, sprudelte bis zum Accept-Loop und brach die Verbindung ab → Reconnect-Sturm).
+    private async Task SendGatedAsync(Client c, byte[] bytes)
     {
         if (c.Ws.State != WebSocketState.Open) return;
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOpts);
-        await c.SendGate.WaitAsync(ct);
-        try
-        {
-            if (c.Ws.State == WebSocketState.Open)
-                await c.Ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, ct);
-        }
-        catch (Exception ex) when (ex is WebSocketException or OperationCanceledException) { }
-        finally { c.SendGate.Release(); }
-    }
-
-    private async Task SendRawThenClearAsync(Client c, byte[] bytes)
-    {
         await c.SendGate.WaitAsync();
         try
         {
             if (c.Ws.State == WebSocketState.Open)
-                await c.Ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+                await c.Ws.SendAsync(new ArraySegment<byte>(bytes),
+                    WebSocketMessageType.Text, true, CancellationToken.None);
         }
-        catch (Exception ex) when (ex is WebSocketException or OperationCanceledException) { }
-        finally
-        {
-            c.SendGate.Release();
-            Interlocked.Exchange(ref c.Sending, 0);
-        }
+        catch (Exception ex) when (ex is WebSocketException
+                                      or OperationCanceledException
+                                      or InvalidOperationException
+                                      or ObjectDisposedException) { }
+        finally { c.SendGate.Release(); }
+    }
+
+    // ct bleibt in der Signatur für die Aufrufer, wird aber bewusst NICHT ans SendAsync
+    // durchgereicht (s. SendGatedAsync).
+    private async Task SendJsonAsync(Client c, object payload, CancellationToken ct)
+    {
+        if (c.Ws.State != WebSocketState.Open) return;
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(payload, JsonOpts);
+        await SendGatedAsync(c, bytes);
+    }
+
+    private async Task SendRawThenClearAsync(Client c, byte[] bytes)
+    {
+        try { await SendGatedAsync(c, bytes); }
+        finally { Interlocked.Exchange(ref c.Sending, 0); }
     }
 
     private void BroadcastFireAndForget(object payload)

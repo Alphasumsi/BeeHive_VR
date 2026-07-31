@@ -577,6 +577,17 @@ public partial class MainViewModel : ObservableObject
     public OverlayContext CurrentOverlayContext => _overlayContext;
 
     private System.Windows.Threading.DispatcherTimer? _contextDebounce;
+    private OverlayContext _pendingContext = OverlayContext.None; // aktueller Kandidat
+    private System.DateTime _pendingSince;                        // seit wann unverändert
+
+    // Spotter ist ein STABILER Zustand (Zuschauen) → lange bestätigen, damit der
+    // NotInWorld-Spawn-in-Blip nicht als Spotter durchrutscht und ein Wegwerf-Layout
+    // baut (kollidiert mit iRacings Spawn-in-Last → Freeze). In-Auto-Kontexte (P/Q/R)
+    // schalten weiter schnell.
+    private static System.TimeSpan SettleFor(OverlayContext ctx) =>
+        ctx == OverlayContext.Spotter
+            ? System.TimeSpan.FromMilliseconds(3000)   // NotInWorld-Spawn-in dauerte gemessen bis 2,24 s
+            : System.TimeSpan.FromMilliseconds(500);
 
     /// <summary>
     /// Priorität: Garage→None · Replay→Spotter · (Session live & nicht im Auto)→Spotter
@@ -610,28 +621,51 @@ public partial class MainViewModel : ObservableObject
         return OverlayContext.None; // Laden / Pre-Session / Invalid
     }
 
-    /// <summary>Kontext neu berechnen, aber erst nach ~0,5 s Stabilität umschalten
-    /// (verhindert Flackern bei Tow/Reset-Blips).</summary>
+    /// <summary>Kontext neu berechnen; erst nach kontext-abhängiger Stabilität
+    /// umschalten (verhindert Flackern bei Tow/Reset-Blips UND Wegwerf-Spotter beim
+    /// Spawn-in — s. SettleFor).</summary>
     private void RecomputeContextDebounced()
     {
-        if (ComputeContext() == _overlayContext) return; // schon stabil
+        var candidate = ComputeContext();
+        if (candidate == _overlayContext)   // Ziel schon aktiv → laufende Umschaltung abbrechen
+        {
+            _pendingContext = candidate;
+            _contextDebounce?.Stop();
+            return;
+        }
+        if (candidate != _pendingContext)   // Kandidat frisch → Uhr neu stellen
+        {
+            _pendingContext = candidate;
+            _pendingSince = System.DateTime.UtcNow;
+        }
         _contextDebounce ??= new System.Windows.Threading.DispatcherTimer
         {
-            Interval = System.TimeSpan.FromMilliseconds(500)
+            Interval = System.TimeSpan.FromMilliseconds(250)   // pollt, solange ein Wechsel offen ist
         };
         _contextDebounce.Tick -= ContextDebounceTick;
         _contextDebounce.Tick += ContextDebounceTick;
-        _contextDebounce.Stop();
-        _contextDebounce.Start();
+        if (!_contextDebounce.IsEnabled) _contextDebounce.Start();
     }
 
     private void ContextDebounceTick(object? sender, System.EventArgs e)
     {
+        var candidate = ComputeContext();
+
+        if (candidate != _pendingContext)   // hat sich seit letztem Tick geändert → Uhr neu
+        {
+            _pendingContext = candidate;
+            _pendingSince = System.DateTime.UtcNow;
+        }
+        if (candidate == _overlayContext)   // wieder am Ziel (zurückgewandert) → fertig
+        {
+            _contextDebounce?.Stop();
+            return;
+        }
+        if (System.DateTime.UtcNow - _pendingSince < SettleFor(candidate)) return; // noch nicht stabil genug
+
         _contextDebounce?.Stop();
-        var settled = ComputeContext();
-        if (settled == _overlayContext) return;
-        _overlayContext = settled;
-        Logger.Info($"OverlayContext → {settled}");
+        _overlayContext = candidate;
+        Logger.Info($"OverlayContext → {candidate}");
         OnPropertyChanged(nameof(CurrentOverlayContext));
         PushCurrentLayoutToEngine();
         ApplyEditorFollow();
