@@ -577,6 +577,33 @@ function syncIframes(): void {
     if (!root) return;
     var wanted = {};
     for (var i = 0; i < specs.length; i++) wanted[specs[i].domId] = specs[i];
+
+    // URL-Reuse (Kontextwechsel-Glaettung): Ein Kontextwechsel (Spotter<->Race ...)
+    // liefert die gleichen Widgets unter ANDEREN Source-IDs. Ohne Reuse wuerde jedes
+    // Panel zerstoert und neu erzeugt -> iframe-Reload (dashie.html + React) + WS-Reconnect
+    // aller Dashies gleichzeitig = CPU-Spike/Transition-Freeze. Hier: verwaiste Browser-
+    // Panels (id nicht mehr gewuenscht) einer neuen Spec mit GLEICHER iframe-URL zuordnen
+    // und nur umbenennen -> der iframe (inkl. WebSocket + React-State) ueberlebt.
+    var reuseScan = root.querySelectorAll('.panel');
+    var orphanByUrl = {};
+    for (var a = 0; a < reuseScan.length; a++) {
+      var ep = reuseScan[a];
+      if (wanted[ep.id]) continue;                 // bleibt eh (id matcht)
+      var epFrame = ep.querySelector('iframe');
+      if (!epFrame || !epFrame.src) continue;      // nur Browser-Panels mit URL
+      if (!orphanByUrl[epFrame.src]) orphanByUrl[epFrame.src] = ep; // erstes gewinnt
+    }
+    for (var b = 0; b < specs.length; b++) {
+      var sp = specs[b];
+      if (sp.kind !== 'browser') continue;
+      if (document.getElementById(sp.domId)) continue; // hat schon ein Panel
+      var reuse = orphanByUrl[sp.url];
+      if (reuse && !wanted[reuse.id]) {
+        delete orphanByUrl[sp.url];                // nur einmal verwenden
+        reuse.id = sp.domId;                       // umbenennen -> ueberlebt Removal, iframe bleibt
+      }
+    }
+
     var existing = root.querySelectorAll('.panel');
     for (var j = 0; j < existing.length; j++) {
       var el = existing[j];
