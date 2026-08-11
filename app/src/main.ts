@@ -422,9 +422,18 @@ function applyWpfLayout(quads: AtlasQuadFromWpf[]): void {
       });
     }
 
-    // (4) BrowserWindow + atlasWidth/Height auf neue Größe ziehen.
-    resizeAtlasWindow(atlasW, atlasH);
-    atlasLog(`[applyWpfLayout] repack: atlas=${atlasW}x${atlasH} regions=${rects.length}`);
+    // (4) BrowserWindow auf die neue Größe ziehen — GROW-ONLY (nie schrumpfen).
+    // Schrumpfen (auf 16x20 bei quads=0 oder auf ein kleineres Layout) triggert im
+    // capture-host einen Ring-Resize und im Layer RebuildSwapchainForNewSize = der
+    // teure Transition-Freeze. Quads tragen eigene Rects, der Layer sampelt nur die
+    // Quad-Rects → eine groessere (teils leere, transparente) Canvas ist harmlos
+    // (index.html: body 100%, .panel position:absolute ab top-left). Nur-Wachsen:
+    // Flips die in die aktuelle Groesse passen -> kein Resize -> kein Freeze. Rein
+    // Atlas-seitig; Layer/capture-host-Swapchain-Logik unberuehrt (VDXR-sicher).
+    const canvasW = Math.max(atlasWidth, atlasW);
+    const canvasH = Math.max(atlasHeight, atlasH);
+    resizeAtlasWindow(canvasW, canvasH);
+    atlasLog(`[applyWpfLayout] repack: content=${atlasW}x${atlasH} canvas=${canvasW}x${canvasH} (grow-only) regions=${rects.length}`);
 
     // (5) URL-Map + Name-Map + Type-Map auf aktuelle Ids reduzieren.
     for (const id of Array.from(slotTargetById.keys())) {
