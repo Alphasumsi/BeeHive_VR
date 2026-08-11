@@ -221,6 +221,7 @@ namespace {
         std::unique_ptr<openxr_api_layer::capture::ICaptureWindow> cap;
         ID3D11Texture2D* surface = nullptr;  // gehört der Capture, nur geborgt
         bool attachFailed = false;           // Fehler bereits geloggt → nicht spammen
+        bool cursorOn = false;               // aktueller WGC-Cursor-Zustand (nur bei Wechsel setzen)
     };
 
     class WindowCaptureManager {
@@ -263,7 +264,7 @@ namespace {
 
                 // Neu oder HWND gewechselt → (re-)attach.
                 wc.cap.reset(); wc.surface = nullptr;
-                wc.hwnd = want; wc.attachFailed = false;
+                wc.hwnd = want; wc.attachFailed = false; wc.cursorOn = false;
                 structureChanged = true;
                 try {
                     wc.cap = std::make_unique<openxr_api_layer::capture::CaptureWindowWinRT>(
@@ -294,8 +295,19 @@ namespace {
         /// Frische Surfaces ziehen. Liefert true, wenn sich mindestens eine geändert hat.
         bool pull() {
             bool changed = false;
+            const HWND fg = GetForegroundWindow();
             for (auto& [id, wc] : m_caps) {
                 if (!wc.cap) continue;
+
+                // Cursor (11.8.2026): WGC-Mauszeiger nur zeigen, solange das Ziel-Fenster
+                // im Vordergrund ist. Hintergrund/minimiert ist nie Vordergrund → Cursor aus.
+                // Setter nur bei Zustandswechsel, damit nicht jeder Tick dieselbe Prop schreibt.
+                const bool wantCursor = (fg == (HWND)(uintptr_t)wc.hwnd);
+                if (wantCursor != wc.cursorOn) {
+                    wc.cap->setCursorCaptureEnabled(wantCursor);
+                    wc.cursorOn = wantCursor;
+                }
+
                 ID3D11Texture2D* s = nullptr;
                 try {
                     s = wc.cap->getSurface();

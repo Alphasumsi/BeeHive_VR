@@ -35,6 +35,11 @@ namespace openxr_api_layer::capture {
         // 0 = jeder getSurface()-Aufruf pullt (Alt-Verhalten). >0 = Capture-Rate gedeckelt.
         virtual void setMinPullIntervalNs(int64_t ns) = 0;
 
+        // Cursor (11.8.2026): WGC-Cursor zur Laufzeit an/aus. Der Ctor lässt ihn aus;
+        // der capture-host schaltet ihn nur EIN, solange das Ziel-Fenster im Vordergrund
+        // ist (background/minimiert = nie Vordergrund → Cursor bleibt aus).
+        virtual void setCursorCaptureEnabled(bool enabled) = 0;
+
         // C2 (8.7.2026): drosselt die Capture PRODUCER-seitig via
         // GraphicsCaptureSession.MinUpdateInterval (Win11 24H2+, Build 26100+) — der DWM
         // erzeugt dann wirklich nur alle N ns einen Frame, statt (24H2-Verhalten, von
@@ -96,6 +101,14 @@ namespace openxr_api_layer::capture {
         }
 
         void setMinPullIntervalNs(int64_t ns) override { m_minPullIntervalNs = ns; }
+
+        void setCursorCaptureEnabled(bool enabled) override {
+            try {
+                m_session.IsCursorCaptureEnabled(enabled);
+            } catch (const winrt::hresult_error&) {
+                // IGraphicsCaptureSession2 nicht verfügbar (vor Win10 2004) — no-op.
+            }
+        }
 
         bool setMinUpdateIntervalNs(int64_t ns) override {
             if (ns <= 0) return true; // 0 = aus (DWM-Default), nichts zu setzen
