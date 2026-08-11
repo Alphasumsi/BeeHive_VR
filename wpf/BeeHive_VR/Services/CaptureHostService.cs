@@ -96,11 +96,15 @@ public sealed class CaptureHostService
         var asmDir = string.IsNullOrEmpty(asm) ? null : Path.GetDirectoryName(asm);
         if (asmDir == null) return null;
 
-        // 1. Sibling neben der WPF-Exe (Installer-Layout)
+        // 1. Sibling neben der WPF-Exe (flaches Layout)
         var sibling = Path.Combine(asmDir, "capture-host.exe");
         if (File.Exists(sibling)) return sibling;
 
-        // 2. Walk-up zum Repo-Root, dann ins Engine-Build-Output
+        // 2. Install-Unterordner engine\ (Setup-Layout %LOCALAPPDATA%\Programs\BeeHive_VR)
+        var installed = Path.Combine(asmDir, "engine", "capture-host.exe");
+        if (File.Exists(installed)) return installed;
+
+        // 3. Walk-up zum Repo-Root, dann ins Engine-Build-Output
         var dir = asmDir;
         for (int i = 0; i < 8 && dir != null; i++)
         {

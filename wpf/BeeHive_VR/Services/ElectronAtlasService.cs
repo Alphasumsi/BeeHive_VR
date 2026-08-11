@@ -151,11 +151,15 @@ public sealed class ElectronAtlasService
         var asmDir = string.IsNullOrEmpty(asm) ? null : Path.GetDirectoryName(asm);
         if (asmDir == null) return null;
 
-        // 1. Sibling neben der WPF-Exe (Installer-Layout)
+        // 1. Sibling neben der WPF-Exe (flaches Layout)
         var sibling = Path.Combine(asmDir, "BeeHive_VR_Atlas.exe");
         if (File.Exists(sibling)) return sibling;
 
-        // 2. Walk-up zum Repo-Root, dann ins Forge-Default-Output
+        // 2. Install-Unterordner atlas\ (Setup-Layout %LOCALAPPDATA%\Programs\BeeHive_VR)
+        var installed = Path.Combine(asmDir, "atlas", "BeeHive_VR_Atlas.exe");
+        if (File.Exists(installed)) return installed;
+
+        // 3. Walk-up zum Repo-Root, dann ins Forge-Default-Output
         var dir = asmDir;
         for (int i = 0; i < 8 && dir != null; i++)
         {

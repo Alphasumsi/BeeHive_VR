@@ -10,7 +10,7 @@
 namespace openxr_api_layer {
 
     const std::string LayerName = LAYER_NAME;
-    const std::string VersionString = "OSR (0.9.9) — Offscreen Atlas + Native Window Capture";
+    const std::string VersionString = "OSR (0.10.8) — Offscreen Atlas + Native Window Capture";
 
     OpenXrApi* GetInstance();
 
