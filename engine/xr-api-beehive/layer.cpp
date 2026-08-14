@@ -1558,8 +1558,23 @@ namespace openxr_api_layer {
                 q.space = m_localSpace;
                 q.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
                 q.subImage.swapchain = m_swapchain;
-                q.subImage.imageRect = {{(int32_t)s.rectX, (int32_t)s.rectY},
-                                        {(int32_t)s.rectW, (int32_t)s.rectH}};
+                // Kanten-Flimmern (12.8.2026): Der Compositor sampelt bilinear an der
+                // imageRect-Aussenkante über die Grenze opak->transparent (Gap) und
+                // erzeugt eine ~1px halbtransparente Randzeile, die mit Kopfbewegung
+                // sub-texel-weise wandert -> aliast/flimmert (nur EINE Kante, springt
+                // beim Repack woandershin, weil andere rectX/Y/W/H). Fix: imageRect um
+                // kQuadEdgeInsetPx nach innen ziehen -> die äusserste gesampelte
+                // Texelzeile liegt im opaken Content -> saubere Kante. Guard: nur wenn
+                // der Quad gross genug ist (sonst W/H <= 0). Kostet 1px Content am Rand
+                // (praktisch unsichtbar). Rein imageRect-Werte, Submit-Pattern unberührt.
+                constexpr int32_t kQuadEdgeInsetPx = 1;
+                int32_t rx = (int32_t)s.rectX, ry = (int32_t)s.rectY;
+                int32_t rw = (int32_t)s.rectW, rh = (int32_t)s.rectH;
+                if (rw > 2 * kQuadEdgeInsetPx && rh > 2 * kQuadEdgeInsetPx) {
+                    rx += kQuadEdgeInsetPx; ry += kQuadEdgeInsetPx;
+                    rw -= 2 * kQuadEdgeInsetPx; rh -= 2 * kQuadEdgeInsetPx;
+                }
+                q.subImage.imageRect = {{rx, ry}, {rw, rh}};
                 q.subImage.imageArrayIndex = 0;
                 q.pose.position    = {s.posX, s.posY, s.posZ};
                 q.pose.orientation = {s.quatX, s.quatY, s.quatZ, s.quatW};
