@@ -69,8 +69,12 @@ if (-not $SkipBuild) {
         Step 'Atlas paketieren (npm run package)'
         Push-Location "$repo\app"
         try {
-            npm run package
-            if ($LASTEXITCODE -ne 0) { throw 'Atlas-Package fehlgeschlagen' }
+            # npm/Vite schreiben harmlose Warnungen (z.B. "empty chunk: preload")
+            # nach stderr; unter ErrorActionPreference=Stop wertet PowerShell 5.1 die
+            # faelschlich als fatal. Daher ueber cmd mit interner Umleitung laufen
+            # lassen und nur den echten Exit-Code pruefen.
+            & cmd.exe /c "npm run package 2>&1"
+            if ($LASTEXITCODE -ne 0) { throw "Atlas-Package fehlgeschlagen (exit $LASTEXITCODE)" }
         } finally { Pop-Location }
     }
 }
