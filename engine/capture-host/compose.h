@@ -238,8 +238,8 @@ void main(uint2 tid : SV_DispatchThreadID)
                 cb->rectW = s.rectW;
                 cb->rectH = s.rectH;
 
-                // Border-Stufung wie im Layer (5.6.2026 v3): Grab cyan 3px >
-                // Hover weiß 2px > Place-Mode grün(gedämpft) 1px > aus.
+                // Border-Stufung: Grab cyan 3px > Hover weiß 3px >
+                // Place-Mode grün(gedämpft) 3px > aus.
                 const bool isGrabbed = std::memcmp(s.id, hl.grabbedId, 16) == 0 &&
                                        hl.grabbedId[0] != '\0';
                 const bool isHovered = !isGrabbed && hl.hoveredId[0] != '\0' &&
@@ -250,11 +250,11 @@ void main(uint2 tid : SV_DispatchThreadID)
                     cb->highlightColor[0] = 0.0f; cb->highlightColor[1] = 1.0f;
                     cb->highlightColor[2] = 1.0f;
                 } else if (isHovered) {
-                    cb->highlightOn = 1.0f; cb->borderPx = 2.0f;
+                    cb->highlightOn = 1.0f; cb->borderPx = 3.0f;
                     cb->highlightColor[0] = 1.0f; cb->highlightColor[1] = 1.0f;
                     cb->highlightColor[2] = 1.0f;
                 } else if (frame.placeModeOn != 0) {
-                    cb->highlightOn = 1.0f; cb->borderPx = 1.0f;
+                    cb->highlightOn = 1.0f; cb->borderPx = 3.0f;
                     cb->highlightColor[0] = 0.0f; cb->highlightColor[1] = 0.55f;
                     cb->highlightColor[2] = 0.0f;
                 } else {
