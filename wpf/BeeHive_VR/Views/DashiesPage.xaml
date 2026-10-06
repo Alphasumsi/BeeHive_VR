@@ -479,6 +479,13 @@
                                                        Style="{StaticResource RowHint}" MaxWidth="420" HorizontalAlignment="Left"/>
                                         </StackPanel>
                                         <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center" Tag="useLivePosition" Click="Toggle_Changed"/></Grid>
+                                    <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0">
+                                            <TextBlock Text="Hide Drivers in Their Pit Stall" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="Removes cars parked in their pit stall instead of scrolling past lap after lap. Cars driving down pit road are still shown."
+                                                       Style="{StaticResource RowHint}" MaxWidth="420" HorizontalAlignment="Left"/>
+                                        </StackPanel>
+                                        <CheckBox Grid.Column="1" Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center" Tag="hideDriversInPitStall" Click="Toggle_Changed"/></Grid>
 
                                     <!-- Relative Time -->
                                     <TextBlock Text="Relative Time" Style="{StaticResource SectionHeader}"/>

@@ -62,13 +62,14 @@ public partial class DashiesPage : UserControl
         { ("Trace", "trace"), ("Bar", "bar"), ("Gear", "gear"), ("ABS", "abs"), ("Steer", "steer") };
 
     // Reihenfolge wie ird's defaultDashboard (driverTag vor teamName). positionChange
-    // bleibt — wie in ird's Settings-UI — bewusst draußen (nicht editierbare Spalte).
+    // seit ird #739 auch im Relative editierbar (Default aus, s. DefaultOffIds).
     private static readonly (string Name, string Id)[] RelativeDisplay =
     {
         ("Position", "position"), ("Car Number", "carNumber"), ("Country Flags", "countryFlags"),
         ("Driver Name", "driverName"), ("Driver Tag", "driverTag"), ("Team Name", "teamName"),
         ("Pit Status", "pitStatus"), ("Car Manufacturer", "carManufacturer"), ("Driver Badge", "badge"),
-        ("iRating Change", "iratingChange"), ("Relative", "delta"), ("Best Time", "fastestTime"),
+        ("iRating Change", "iratingChange"), ("Position Change", "positionChange"),
+        ("Relative", "delta"), ("Best Time", "fastestTime"),
         ("Last Time", "lastTime"), ("Tire Compound", "compound"), ("Lap Delta", "lapTimeDeltas"),
         ("Driven Laps", "drivenLaps"),
     };
@@ -194,7 +195,7 @@ public partial class DashiesPage : UserControl
     {
         coll.Clear();
         foreach (var (name, id) in defs)
-            coll.Add(new DisplayItem { Name = name, Id = id, Enabled = true });
+            coll.Add(new DisplayItem { Name = name, Id = id, Enabled = !DefaultOffIds.Contains(id) });
     }
 
     /// <summary>Sidebar-Anzeigename → irdashies-Widget-Id.</summary>
@@ -401,6 +402,10 @@ public partial class DashiesPage : UserControl
     }
 
     /// <summary>Baut eine Reihenfolge-Liste aus &lt;prefix&gt;displayOrder + &lt;prefix&gt;&lt;id&gt;.enabled.</summary>
+    // Spalten, die ird ohne eigenen Config-Key ausblendet ('positionChange' in config
+    // ? enabled : false) — fehlt der Key, darf die UI sie nicht als „an" zeigen.
+    private static readonly HashSet<string> DefaultOffIds = new() { "positionChange" };
+
     private static void LoadList(JsonObject cfg, ObservableCollection<DisplayItem> coll,
         (string Name, string Id)[] defs, string prefix)
     {
@@ -419,7 +424,7 @@ public partial class DashiesPage : UserControl
                     items.Add(new DisplayItem
                     {
                         Name = def.Name, Id = def.Id,
-                        Enabled = AsBool(GetByPath(scope, def.Id + ".enabled")) ?? true,
+                        Enabled = AsBool(GetByPath(scope, def.Id + ".enabled")) ?? !DefaultOffIds.Contains(def.Id),
                     });
             }
         }
@@ -429,7 +434,9 @@ public partial class DashiesPage : UserControl
                 items.Add(new DisplayItem
                 {
                     Name = name, Id = id,
-                    Enabled = scope != null ? (AsBool(GetByPath(scope, id + ".enabled")) ?? true) : true,
+                    Enabled = scope != null
+                        ? (AsBool(GetByPath(scope, id + ".enabled")) ?? !DefaultOffIds.Contains(id))
+                        : !DefaultOffIds.Contains(id),
                 });
 
         coll.Clear();
