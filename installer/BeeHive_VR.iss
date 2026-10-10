@@ -12,7 +12,7 @@
 ; ============================================================================
 
 #define MyAppName        "BeeHive_VR"
-#define MyAppVersion      "0.10.10"
+#define MyAppVersion      "0.11.1"
 #define MyAppPublisher    "BeeHive_VR"
 #define MyAppURL          "https://github.com/Alphasumsi/BeeHive_VR"
 #define MyAppExeName      "BeeHiveVR.exe"
