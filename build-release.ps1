@@ -28,13 +28,18 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Staging = "$PSScriptRoot\release\staging",
+    [string]$Staging = '',
     [switch]$SkipBuild,
     [switch]$SkipAtlas
 )
 
 $ErrorActionPreference = 'Stop'
-$repo   = $PSScriptRoot
+# $PSScriptRoot kann leer sein (z.B. verschachtelter powershell -File-Aufruf) ->
+# sonst landet das Staging relativ zur Laufwerks-Root (D:\release\staging).
+$repo = $PSScriptRoot
+if (-not $repo) { $repo = Split-Path -Parent $MyInvocation.MyCommand.Path }
+if (-not $repo) { throw 'Repo-Pfad nicht ermittelbar ($PSScriptRoot leer).' }
+if (-not $Staging) { $Staging = Join-Path $repo 'release\staging' }
 $config = 'Release'
 
 function Step($msg) { Write-Host "`n=== $msg ===" -ForegroundColor Cyan }
